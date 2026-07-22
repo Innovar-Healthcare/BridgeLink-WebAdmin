@@ -96,11 +96,11 @@ the channel editor (Monaco-based) when first opened, which adds ~50 MB.
 The same build is available in three formats. Pick whichever fits your
 environment.
 
-| Format                        | Best for                              | Setup                                            |
-| ----------------------------- | ------------------------------------- | ------------------------------------------------ |
-| **Docker image**              | Linux servers, multi-user deployments | `docker pull innovarhc/bridgelink-web-ui:latest` |
-| **Linux tarball** (`.tar.gz`) | Linux servers without Docker          | Extract, run `./start-https.sh`                  |
-| **Windows zip** (`.zip`)      | Windows servers, single-user testing  | Extract, double-click `start-https.bat`          |
+| Format                        | Best for                              | Setup                                                      |
+| ----------------------------- | ------------------------------------- | ---------------------------------------------------------- |
+| **Docker image**              | Linux servers, multi-user deployments | `docker pull innovarhealthcare/bridgelink-webadmin:latest` |
+| **Linux tarball** (`.tar.gz`) | Linux servers without Docker          | Extract, run `./start-https.sh`                            |
+| **Windows zip** (`.zip`)      | Windows servers, single-user testing  | Extract, double-click `start-https.bat`                    |
 
 For step-by-step installation, see
 [INSTALL-TARBALL.md](./INSTALL-TARBALL.md) (tarball/zip) or

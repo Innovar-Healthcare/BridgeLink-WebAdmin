@@ -8,16 +8,10 @@ Docker images. For hardware, OS, and browser requirements, see
 
 ## Images
 
-Two variants are published to Docker Hub:
+The image is published to Docker Hub as `innovarhealthcare/bridgelink-webadmin`.
 
-| Image                                  | Contents                                    |
-| -------------------------------------- | ------------------------------------------- |
-| `innovarhc/bridgelink-web-ui`          | Base build — open-source plugins only       |
-| `innovarhc/bridgelink-web-ui-advanced` | Base + commercial plugins (SSL, OIDC, etc.) |
-
-Both images share the same tag scheme. Each build pushes several tags pointing
-at the same image digest, so you can pin to whichever level of stability you
-want:
+It is published with several tags pointing at the same image digest, so you can
+pin to whichever level of stability you want:
 
 | Tag            | Example        | Use for                                                    |
 | -------------- | -------------- | ---------------------------------------------------------- |
@@ -39,7 +33,7 @@ Create a `docker-compose.yml`:
 ```yaml
 services:
   bridgelink-webui:
-    image: innovarhc/bridgelink-web-ui:latest
+    image: innovarhealthcare/bridgelink-webadmin:latest
     container_name: bridgelink-webui
     ports:
       - "3000:3000"
@@ -66,14 +60,14 @@ docker compose down         # stop
 ### docker run (manual)
 
 ```bash
-docker pull innovarhc/bridgelink-web-ui:latest
+docker pull innovarhealthcare/bridgelink-webadmin:latest
 
 docker run -d \
   -p 3000:3000 \
   -e BRIDGELINK_SERVER_URL=https://your-bridgelink-server:8443 \
   -e BL_ACCEPT_LICENSE=1 \
   --name bridgelink-webui \
-  innovarhc/bridgelink-web-ui:latest
+  innovarhealthcare/bridgelink-webadmin:latest
 ```
 
 Open `https://localhost:3000` in your browser. (HTTPS is the default — see
@@ -116,7 +110,7 @@ docker run -d \
   -v /etc/ssl/bridgelink:/app/certs:ro \
   -e BRIDGELINK_SERVER_URL=https://your-server:8443 \
   -e BL_ACCEPT_LICENSE=1 \
-  innovarhc/bridgelink-web-ui:latest
+  innovarhealthcare/bridgelink-webadmin:latest
 ```
 
 The host directory must contain `server.crt` and `server.key`, and must be
@@ -133,7 +127,7 @@ docker run -d \
   -v bridgelink-certs:/app/certs \
   -e BRIDGELINK_SERVER_URL=https://your-server:8443 \
   -e BL_ACCEPT_LICENSE=1 \
-  innovarhc/bridgelink-web-ui:latest
+  innovarhealthcare/bridgelink-webadmin:latest
 ```
 
 ---
@@ -186,7 +180,7 @@ To roll back to a previous build, change the image tag in
 `docker-compose.yml`:
 
 ```yaml
-image: innovarhc/bridgelink-web-ui:26.6.0
+image: innovarhealthcare/bridgelink-webadmin:26.6.0
 ```
 
 …and run `docker compose up -d` again.

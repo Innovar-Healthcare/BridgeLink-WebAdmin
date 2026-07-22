@@ -22,4 +22,4 @@ Building plugins:
 
 Need help? Reach us on
 [Slack](https://bridgelink.innovarhealthcare.com) or open an issue at
-[github.com/Innovar-Healthcare/BridgeLink-Webadmin](https://github.com/Innovar-Healthcare/BridgeLink-Webadmin).
+[github.com/Innovar-Healthcare/BridgeLink-WebAdmin](https://github.com/Innovar-Healthcare/BridgeLink-WebAdmin).

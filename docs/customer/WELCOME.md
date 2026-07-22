@@ -56,7 +56,7 @@ licensing, contact Innovar Healthcare.
   [bridgelink.innovarhealthcare.com](https://bridgelink.innovarhealthcare.com)
 
 - **GitHub Issues — for bugs and feature requests:**
-  [github.com/Innovar-Healthcare/BridgeLink-Webadmin](https://github.com/Innovar-Healthcare/BridgeLink-Webadmin)
+  [github.com/Innovar-Healthcare/BridgeLink-WebAdmin](https://github.com/Innovar-Healthcare/BridgeLink-WebAdmin)
 
 ### What to include in a bug report
 

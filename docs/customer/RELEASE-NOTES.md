@@ -104,7 +104,7 @@ licensing, contact Innovar Healthcare.
 - **Slack** — questions, discussion, quick help:
   [bridgelink.innovarhealthcare.com](https://bridgelink.innovarhealthcare.com)
 - **GitHub Issues** — bugs and feature requests:
-  [github.com/Innovar-Healthcare/BridgeLink-Webadmin](https://github.com/Innovar-Healthcare/BridgeLink-Webadmin)
+  [github.com/Innovar-Healthcare/BridgeLink-WebAdmin](https://github.com/Innovar-Healthcare/BridgeLink-WebAdmin)
 
 When reporting a bug, please include the build identifier (`26.6.0`), your browser
 and OS, what you were doing, and any browser-console errors. See

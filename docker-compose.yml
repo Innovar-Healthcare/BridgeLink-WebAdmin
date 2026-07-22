@@ -1,6 +1,6 @@
 services:
   bridgelink-webui:
-    image: innovarhc/bridgelink-web-ui-advanced:latest
+    image: innovarhealthcare/bridgelink-webadmin:latest
     container_name: bridgelink-webui
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
