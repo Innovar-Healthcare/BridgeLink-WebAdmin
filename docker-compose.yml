@@ -1,0 +1,29 @@
+services:
+  bridgelink-webui:
+    image: innovarhc/bridgelink-web-ui-advanced:latest
+    container_name: bridgelink-webui
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    environment:
+      # URL of the BridgeLink server this web UI connects to.
+      # Self-signed BridgeLink certs are accepted automatically on the
+      # WebAdmin→BridgeLink hop — no NODE_TLS_REJECT_UNAUTHORIZED needed.
+      BRIDGELINK_SERVER_URL: ${BRIDGELINK_SERVER_URL:-https://localhost:8443}
+      PORT: ${PORT:-3000}
+      # Comma-separated list of allowed BridgeLink server URLs.
+      # Leave unset to allow any server.
+      # BRIDGELINK_ALLOWED_SERVERS: https://server1:8443,https://server2:8443
+
+      # Required — container will not start without this (BSL 1.1 + Supplemental
+      # Terms acceptance). See LICENSE and SUPPLEMENTAL-TERMS.md at repo root.
+      BL_ACCEPT_LICENSE: "1"
+
+      # ── Bring-your-own TLS cert (optional) ──────────────────────────────────
+      # Uncomment SSL_* vars and the volumes block below to use your own cert.
+      # If omitted, the entrypoint generates a self-signed cert at startup.
+      # SSL_CERT_FILE: /app/certs/server.crt
+      # SSL_KEY_FILE:  /app/certs/server.key
+    restart: unless-stopped
+    # volumes:
+    #   - ./certs/server.crt:/app/certs/server.crt:ro
+    #   - ./certs/server.key:/app/certs/server.key:ro

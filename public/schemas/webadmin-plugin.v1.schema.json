@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.bridgelink.online/webadmin-plugin/v1.json",
+  "title": "BridgeLink WebAdmin plugin manifest (webadmin.json) — v1",
+  "description": "Declarative UI an engine extension contributes to BridgeLink WebAdmin. Editor/CI tooling artifact for the frozen v1 contract (docs/WEBADMIN-PLUGIN-CONTRACT.md); the hand-rolled runtime validator (lib/runtime-plugins/manifest-validator.ts) is the authoritative enforcement point and is kept in lockstep by __tests__/unit/manifest-schema-lockstep.test.ts. This schema is intentionally NO STRICTER than that validator (so an editor never flags a manifest the runtime would load); several validator rules cannot be expressed in JSON Schema and are therefore NOT checked here: action-endpoint /extensions/<path>/ prefix, condition `field` references resolving to a declared field key, MAX_FIELDS_PER_PANEL summed across a panel's sections, cross-item uniqueness (transportName / tabKey / field key), and the regex catastrophic-backtracking scan. Run the CLI validator (npm run validate:manifest) or load the extension to enforce those.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifestVersion"],
+  "properties": {
+    "$schema": { "type": "string", "maxLength": 256 },
+    "manifestVersion": {
+      "const": 1,
+      "description": "Literal 1. Any other value is skipped as an unsupported manifest version."
+    },
+    "minWebAdminVersion": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^\\d+(\\.\\d+){0,3}$",
+      "description": "Minimum WebAdmin build version; a newer floor is skipped-with-reason on older builds."
+    },
+    "connectorPanels": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/connectorPanel" }
+    },
+    "settingsPanels": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/settingsPanel" }
+    }
+  },
+  "$defs": {
+    "connectorPanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "transportName", "sections"],
+      "properties": {
+        "mode": { "enum": ["source", "destination"] },
+        "transportName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*$",
+          "description": "Connector registry key + Connector Type dropdown entry."
+        },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/connectorSection" }
+        },
+        "actions": { "$ref": "#/$defs/actions" }
+      }
+    },
+    "settingsPanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tabKey", "tabLabel", "sections"],
+      "properties": {
+        "tabKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9-]+$",
+          "description": "Lowercase slug; namespaced with the extension name at registration."
+        },
+        "tabLabel": { "$ref": "#/$defs/label" },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/settingsSection" }
+        },
+        "actions": { "$ref": "#/$defs/actions" }
+      }
+    },
+    "connectorSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "fields"],
+      "properties": {
+        "title": { "$ref": "#/$defs/label" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/connectorField" }
+        }
+      }
+    },
+    "settingsSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "fields"],
+      "properties": {
+        "title": { "$ref": "#/$defs/label" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/settingsField" }
+        }
+      }
+    },
+    "connectorField": {
+      "description": "A connector-panel field. Its key names a direct child element of the connector's <properties> XML; defaults come from the engine defaults endpoint, so defaultValue is not allowed here.",
+      "allOf": [{ "$ref": "#/$defs/fieldCommon" }, { "not": { "required": ["defaultValue"] } }]
+    },
+    "settingsField": {
+      "description": "A settings-panel field. Its key maps to the extension's /extensions/{name}/properties record; defaultValue is allowed.",
+      "allOf": [
+        { "$ref": "#/$defs/fieldCommon" },
+        {
+          "properties": {
+            "defaultValue": { "type": "string", "maxLength": 500 }
+          }
+        }
+      ]
+    },
+    "fieldCommon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "label"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$"
+        },
+        "type": { "enum": ["text", "secret", "number", "checkbox", "select", "radio", "textarea"] },
+        "label": { "$ref": "#/$defs/label" },
+        "tooltip": { "type": "string", "maxLength": 500 },
+        "placeholder": { "type": "string", "maxLength": 500 },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "label"],
+            "properties": {
+              "value": { "type": "string", "maxLength": 500 },
+              "label": { "$ref": "#/$defs/label" }
+            }
+          }
+        },
+        "defaultValue": { "type": "string", "maxLength": 500 },
+        "visibleWhen": { "$ref": "#/$defs/condition" },
+        "enabledWhen": { "$ref": "#/$defs/condition" },
+        "validation": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/rule" }
+        }
+      },
+      "allOf": [
+        {
+          "description": "options are required for select/radio and forbidden otherwise.",
+          "if": { "properties": { "type": { "enum": ["select", "radio"] } }, "required": ["type"] },
+          "then": { "required": ["options"] },
+          "else": { "not": { "required": ["options"] } }
+        },
+        {
+          "description": "placeholder only on text/secret/number/textarea.",
+          "if": {
+            "properties": { "type": { "enum": ["checkbox", "select", "radio"] } },
+            "required": ["type"]
+          },
+          "then": { "not": { "required": ["placeholder"] } }
+        },
+        {
+          "description": "min/max validation rules only on number fields.",
+          "if": {
+            "properties": {
+              "validation": {
+                "contains": {
+                  "type": "object",
+                  "properties": { "rule": { "enum": ["min", "max"] } },
+                  "required": ["rule"]
+                }
+              }
+            },
+            "required": ["validation"]
+          },
+          "then": { "properties": { "type": { "const": "number" } }, "required": ["type"] }
+        }
+      ]
+    },
+    "condition": {
+      "oneOf": [
+        { "$ref": "#/$defs/leafCondition" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allOf"],
+          "properties": {
+            "allOf": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": { "$ref": "#/$defs/leafCondition" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["anyOf"],
+          "properties": {
+            "anyOf": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": { "$ref": "#/$defs/leafCondition" }
+            }
+          }
+        }
+      ]
+    },
+    "leafCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "op"],
+      "properties": {
+        "field": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "op": { "enum": ["eq", "ne", "in", "truthy"] },
+        "value": { "type": "string", "maxLength": 500 },
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "type": "string", "maxLength": 500 }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "op": { "enum": ["eq", "ne"] } }, "required": ["op"] },
+          "then": { "required": ["value"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "in" } }, "required": ["op"] },
+          "then": { "required": ["values"] }
+        }
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule"],
+      "properties": {
+        "rule": { "enum": ["required", "pattern", "min", "max"] },
+        "pattern": { "type": "string", "maxLength": 256 },
+        "value": { "type": "number" },
+        "message": { "type": "string", "maxLength": 500 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "rule": { "const": "pattern" } }, "required": ["rule"] },
+          "then": { "required": ["pattern"] }
+        },
+        {
+          "if": { "properties": { "rule": { "enum": ["min", "max"] } }, "required": ["rule"] },
+          "then": { "required": ["value"] }
+        }
+      ]
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "endpoint", "method"],
+        "properties": {
+          "label": { "$ref": "#/$defs/label" },
+          "endpoint": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "method": { "enum": ["GET", "POST"] },
+          "confirm": { "type": "string", "maxLength": 500 }
+        }
+      }
+    },
+    "label": { "type": "string", "minLength": 1, "maxLength": 120 }
+  }
+}

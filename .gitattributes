@@ -1,0 +1,2 @@
+# Always use LF for shell scripts regardless of OS
+scripts/*.sh text eol=lf
