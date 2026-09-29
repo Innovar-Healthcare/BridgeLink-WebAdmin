@@ -20,6 +20,7 @@ import { MessageTemplatesTab } from "./message-template-editor";
 import { DATA_TYPE_REGISTRY } from "../../_datatypes/index";
 import { pluginRegistry, type EditorContext } from "@/lib/plugin-registry";
 import { usePluginSurfaceEnabled } from "@/lib/plugin-gating";
+import { registerMonacoThemeRules } from "@/lib/monaco-theme";
 
 // ─── Monaco token marker registration ────────────────────────────────────────
 // Stored on globalThis so idempotency survives HMR and component remounts.
@@ -28,10 +29,14 @@ const _g = globalThis as Record<string, unknown>;
 function maybeRegisterTokenMarker(dataTypeName: string): void {
   const plugin = DATA_TYPE_REGISTRY.get(dataTypeName);
   if (!plugin?.tokenMarker) return;
-  const { languageId, tokenizer } = plugin.tokenMarker;
+  const { languageId, tokenizer, tokenRules, darkTokenRules } = plugin.tokenMarker;
   const guardKey = `__blDtTokenMarker_${languageId}`;
   if (_g[guardKey]) return;
   _g[guardKey] = true;
+  // Token colors go into the app's single global theme. Registered
+  // before the language so the rules are in place whenever the theme is next
+  // defined; registerMonacoThemeRules re-defines it if an editor is already up.
+  if (tokenRules?.length) registerMonacoThemeRules(tokenRules, darkTokenRules);
   // Dynamic import avoids pulling the full monaco-editor bundle into the SSR path.
   void import("monaco-editor").then((monaco) => {
     monaco.languages.register({ id: languageId });

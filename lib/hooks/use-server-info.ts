@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { getServerSettings } from "@/lib/api-client";
+// Imported from the specific module, not the `api-client` barrel — see the note in
+// `use-charset-encodings.ts`.
+import { getServerSettings } from "@/lib/api/api-settings";
 
 interface ServerInfo {
   serverName?: string;

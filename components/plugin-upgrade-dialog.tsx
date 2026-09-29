@@ -65,7 +65,7 @@ export function PluginUpgradeDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{lead}</DialogDescription>
         </DialogHeader>
-        <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
+        <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>
             Dismiss
           </Button>

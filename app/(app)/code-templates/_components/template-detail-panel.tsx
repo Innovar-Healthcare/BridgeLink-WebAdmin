@@ -223,7 +223,7 @@ export function TemplateDetailPanel({
               </button>
             </div>
             <div className="flex gap-2">
-              <HoverTooltip content="Auto-format the JavaScript code using the built-in formatter.">
+              <HoverTooltip content="Auto-format the JavaScript code.">
                 <button
                   onClick={onFormat}
                   className="px-3 py-1 text-sm bg-white dark:bg-gray-800 dark:text-gray-300 border border-border rounded hover:bg-gray-50 dark:hover:bg-gray-700"

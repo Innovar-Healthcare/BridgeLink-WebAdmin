@@ -9,6 +9,7 @@
 
 import type { CronJob } from "@/app/(app)/channels/_lib/channel-xml";
 import { isValidCronExpression } from "@/lib/cron-utils";
+import { getCachedCronVerdict } from "@/lib/cron-verdict-cache";
 
 export type { CronJob };
 export type ScheduleType = "interval" | "time" | "cron";
@@ -522,8 +523,12 @@ export function validatePruner(form: PrunerForm): string | null {
       if (!expr) {
         return "Cron expression cannot be blank.";
       }
-      if (!isValidCronExpression(expr)) {
-        return `Invalid cron expression: "${expr}".`;
+      // A cached _validateCron verdict wins over the client approximation in
+      // both directions — a miss falls back to the client check exactly as before.
+      const cached = getCachedCronVerdict(expr);
+      const valid = cached ? cached.valid : isValidCronExpression(expr);
+      if (!valid) {
+        return cached?.message ?? `Invalid cron expression: "${expr}".`;
       }
     }
   }

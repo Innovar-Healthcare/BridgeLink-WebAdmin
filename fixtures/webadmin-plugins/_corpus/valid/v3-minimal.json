@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 3,
+  "connectorPanels": [
+    {
+      "mode": "source",
+      "transportName": "Corpus Minimal v3",
+      "sections": [
+        {
+          "title": "General",
+          "fields": [{ "key": "headers", "type": "map", "label": "Headers" }]
+        }
+      ]
+    }
+  ]
+}

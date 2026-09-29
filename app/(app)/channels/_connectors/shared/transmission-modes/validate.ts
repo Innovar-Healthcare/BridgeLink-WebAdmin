@@ -127,6 +127,15 @@ export function isTransmissionModeNonDefault(
       s.maxRetries !== MLLP_DEFAULTS.maxRetries
     );
   }
+
+  // Runtime (manifest-contributed) modes: compare the declared extra fields
+  // against the mode's compiled defaults. Only declared keys matter — stray
+  // extra entries from a previous mode are reset on switch anyway.
+  if (def.defaultExtra) {
+    for (const [key, defaultValue] of Object.entries(def.defaultExtra)) {
+      if ((s.extra[key] ?? defaultValue) !== defaultValue) return true;
+    }
+  }
   return false;
 }
 
@@ -144,5 +153,7 @@ export function defaultSettingsForMode(def: TransmissionModeDefinition): Transmi
     ackBytes: MLLP_DEFAULTS.ackBytes,
     nackBytes: MLLP_DEFAULTS.nackBytes,
     maxRetries: MLLP_DEFAULTS.maxRetries,
+    // Copied so edits to the live settings never mutate the definition.
+    extra: { ...(def.defaultExtra ?? {}) },
   };
 }

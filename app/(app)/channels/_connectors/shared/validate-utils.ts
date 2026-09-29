@@ -6,7 +6,16 @@
  */
 
 import { isValidCronExpression } from "@/lib/cron-utils";
-import { parsePollConnectorFromPropertiesXml } from "../../_lib/channel-xml";
+// Imported from the leaf `poll-connector-xml` rather than from `channel-xml`.
+// Connector plugins value-import this module from their definition, and those definitions are
+// reachable from `plugins/index.ts`, which server route handlers import. `channel-xml` value-imports
+// DATA_TYPE_REGISTRY and therefore every client `.tsx` datatype module, so reaching it from here
+// pulled the whole channel-editor component graph into React Server Components and failed the build.
+import { parsePollConnectorFromPropertiesXml } from "../../_lib/poll-connector-xml";
+// `cron-verdict-cache`'s only runtime import is `registerCacheTeardown` from `lib/logout`,
+// which its own header documents as safe from any reachable path including server-side —
+// so this stays safe on the same server-reachable path as the leaf import above.
+import { getCachedCronVerdict } from "@/lib/cron-verdict-cache";
 
 /** A single field-level validation error with the XML field name and human-readable message. */
 export interface ValidationError {
@@ -48,12 +57,19 @@ export function validatePolling(propertiesXml: string | null): ValidationError[]
     } else {
       for (const job of poll.cronJobs) {
         const expr = job.expression?.trim() ?? "";
-        if (!expr || !isValidCronExpression(expr)) {
+        if (!expr) {
+          errors.push({ field: "cronJobs", message: "Cron expression cannot be blank." });
+          continue;
+        }
+        // A cached _validateCron verdict wins over the client approximation
+        // in both directions — a miss (never validated this session, or the server is
+        // unreachable/gated off) falls back to the client check exactly as before.
+        const cached = getCachedCronVerdict(expr);
+        const valid = cached ? cached.valid : isValidCronExpression(expr);
+        if (!valid) {
           errors.push({
             field: "cronJobs",
-            message: expr
-              ? `Invalid cron expression: "${expr}".`
-              : "Cron expression cannot be blank.",
+            message: cached?.message ?? `Invalid cron expression: "${expr}".`,
           });
         }
       }

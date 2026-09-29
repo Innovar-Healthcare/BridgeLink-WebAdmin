@@ -25,6 +25,7 @@
 
 import {
   usePluginSurfaceEnabled,
+  usePluginSurfaceLocked,
   usePluginSurfaceReady,
   VERSION_HISTORY_PLUGIN_NAME,
   isVersionHistoryEnabledSnapshot,
@@ -37,7 +38,7 @@ import { getSlotOwner, type SlotName } from "@/lib/plugin-slots";
 import { getPluginDefinition } from "@/lib/plugin-manifest";
 
 // Re-exported so read sites import all gating from one place.
-export { usePluginSurfaceEnabled, usePluginSurfaceReady };
+export { usePluginSurfaceEnabled, usePluginSurfaceLocked, usePluginSurfaceReady };
 export type { SurfaceGate };
 
 /**

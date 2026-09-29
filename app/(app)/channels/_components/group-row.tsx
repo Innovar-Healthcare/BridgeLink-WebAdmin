@@ -19,6 +19,7 @@ import {
   Download,
   Trash2,
   Copy,
+  FilePlus,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -75,6 +76,7 @@ export function GroupRow({
   onDeployAll,
   onEnableAll,
   onDisableAll,
+  onNewChannel,
   density = "default",
 }: {
   group: ChannelGroup;
@@ -92,6 +94,7 @@ export function GroupRow({
   onDeployAll?: (group: ChannelGroup) => void;
   onEnableAll?: (group: ChannelGroup) => void;
   onDisableAll?: (group: ChannelGroup) => void;
+  onNewChannel?: (group: ChannelGroup) => void;
   density?: ViewDensity;
 }) {
   const groupFont = density === "compact" ? "text-xs" : "text-sm";
@@ -245,6 +248,15 @@ export function GroupRow({
     <ContextMenu>
       <ContextMenuTrigger asChild>{rowEl}</ContextMenuTrigger>
       <ContextMenuContent>
+        {onNewChannel && (
+          <>
+            <ContextMenuItem onClick={() => onNewChannel(group)}>
+              <FilePlus className="w-4 h-4" />
+              New Channel
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         {onDeployAll && (
           <>
             <ContextMenuItem onClick={() => onDeployAll(group)} disabled={!hasEnabledChannels}>

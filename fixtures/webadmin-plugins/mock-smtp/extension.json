@@ -1,0 +1,6 @@
+{
+  "name": "Mock SMTP Connector",
+  "path": "mock-smtp",
+  "version": "1.0.0",
+  "enabled": true
+}

@@ -22,19 +22,29 @@
  * tricks cannot smuggle a disallowed host past the check. Only https is
  * accepted; http, file, and other schemes never match.
  *
- * ## sameHost mode and Host-header trust
+ * ## sameHost mode and Host-header trust /
  *
  * In `sameHost` mode the allowed server is derived as `https://<host>:8443`.
  * The host is resolved with this precedence:
  *
  *   1. BRIDGELINK_PUBLIC_HOST env var — trusted operator-supplied hostname (or
  *      host:port); safe regardless of the request Host header.
- *   2. Request Host header — only when TRUST_PROXY is not "false" (the default).
- *      Requires the fronting proxy/load-balancer to pin the Host header to the
- *      real public hostname; without that guarantee a spoofed Host gives an
- *      attacker-controlled (but https-only, port-8443-fixed) SSRF target.
- *   3. null — when neither source is available. Operators in this state should
- *      set BRIDGELINK_SERVER_URL or BRIDGELINK_ALLOWED_SERVERS explicitly.
+ *   2. Request Host header — only when TRUST_PROXY_HOST is explicitly "true"
+ *      (opt-in; default OFF). Because the Host header is client-supplied, a
+ *      deployment behind a proxy that does not pin it would otherwise let a
+ *      spoofed Host retarget the upstream hop to an attacker-controlled (but
+ *      https-only, port-8443-fixed) origin — a constrained SSRF / login
+ *      look-alike vector. Enable this ONLY when the fronting
+ *      proxy/load-balancer is known to pin the Host header to the real public
+ *      hostname; otherwise prefer BRIDGELINK_PUBLIC_HOST.
+ *   3. null — when neither source is available. This is the default sameHost
+ *      posture: operators must set BRIDGELINK_PUBLIC_HOST (or an explicit
+ *      BRIDGELINK_SERVER_URL / BRIDGELINK_ALLOWED_SERVERS allowlist).
+ *
+ * Note: TRUST_PROXY (the X-Forwarded-Proto trust used for cookie Secure/HSTS in
+ * `cookie-security.ts` and `server.ts`) is a SEPARATE knob and is intentionally
+ * NOT reused here — flipping it would silently disable HTTPS detection for
+ * cookies on a standard TLS-terminating-proxy deployment.
  */
 
 import { logStartupWarn } from "./server-log";
@@ -133,8 +143,14 @@ function parseHostname(raw: string): string | null {
  *
  * Precedence:
  *   1. BRIDGELINK_PUBLIC_HOST env var (trusted; ignores the request Host header)
- *   2. Request Host header (only when TRUST_PROXY !== "false")
- *   3. null (safe fallback; operators should set an explicit allowlist env)
+ *   2. Request Host header (only when TRUST_PROXY_HOST === "true"; opt-in, default OFF)
+ *   3. null (safe default; operators should set BRIDGELINK_PUBLIC_HOST or an
+ *      explicit allowlist env)
+ *
+ * The Host-header fallback is gated on TRUST_PROXY_HOST — a dedicated opt-in,
+ * NOT the shared TRUST_PROXY flag — so that closing the spoofed-Host SSRF vector
+ * does not also disable the X-Forwarded-Proto cookie/HSTS trust that
+ * TRUST_PROXY governs elsewhere.
  */
 function sameHostDefault(req: HeaderReq): string | null {
   const publicHost = process.env.BRIDGELINK_PUBLIC_HOST;
@@ -143,7 +159,7 @@ function sameHostDefault(req: HeaderReq): string | null {
     if (hostname) return `https://${hostname}:8443`;
   }
 
-  if (process.env.TRUST_PROXY?.toLowerCase() !== "false") {
+  if (process.env.TRUST_PROXY_HOST?.toLowerCase() === "true") {
     const host = req.headers.get("host");
     if (host) {
       const hostname = parseHostname(host);
@@ -176,6 +192,16 @@ export function getServerConfig(req: HeaderReq): ServerConfig {
   }
 
   const sameHost = sameHostDefault(req);
+  if (!sameHost && process.env.NODE_ENV === "production") {
+    logStartupWarn(
+      "samehost-unconfigured",
+      "sameHost mode is active but no BridgeLink server could be resolved: " +
+        "set BRIDGELINK_PUBLIC_HOST (recommended), BRIDGELINK_SERVER_URL, or " +
+        "BRIDGELINK_ALLOWED_SERVERS. The request Host header is no longer trusted " +
+        "by default to derive the upstream origin; enable TRUST_PROXY_HOST=true " +
+        "only if a fronting proxy pins the Host header."
+    );
+  }
   return {
     mode: "sameHost",
     servers: sameHost ? [sameHost] : [],

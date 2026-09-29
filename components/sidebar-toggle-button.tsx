@@ -12,6 +12,7 @@ export function SidebarToggleButton() {
       <TooltipTrigger asChild>
         <button
           onClick={toggleCollapsed}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           className="absolute bottom-[36px] -right-3 z-50 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-white shadow-sm transition-shadow hover:shadow-md cursor-pointer dark:bg-gray-800"
         >
           {collapsed ? (

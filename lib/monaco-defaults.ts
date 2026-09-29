@@ -24,8 +24,7 @@ const baseOptions: MonacoType.editor.IStandaloneEditorConstructionOptions = {
   automaticLayout: true,
   scrollBeyondLastLine: false,
   minimap: { enabled: false },
-  fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace",
-  fontSize: 13,
+  // fontFamily / fontSize are defined below as prefs-reading getters.
   lineNumbers: "on",
   tabSize: 2,
   insertSpaces: true,
@@ -43,6 +42,29 @@ const baseOptions: MonacoType.editor.IStandaloneEditorConstructionOptions = {
 Object.defineProperty(baseOptions, "overflowWidgetsDomNode", {
   enumerable: true,
   get: getOverflowWidgetsRoot,
+});
+
+// Font family/size come from the user's Code Editor Preferences.
+//
+// These are getters for the same reason overflowWidgetsDomNode is: they must be
+// read at spread time, not module-init time. Every editor spreads
+// MONACO_BASE_OPTIONS, so a getter makes the pref apply to *all* of them —
+// including the ~12 non-Rhino editors (XSLT panel, message templates, file and
+// document writer, content viewer, lookups value dialog, ...) that never called
+// getRhinoEditorOptions() and so silently ignored the setting entirely.
+//
+// Spreading copies the getter's current value, so each render picks up a changed
+// pref, and a per-editor override placed *after* the spread still wins (e.g.
+// web-service-sender.tsx's `fontSize: 12`). loadAdminPrefs() is fingerprint-cached
+// precisely because Monaco calls it on every render, so this stays cheap; under
+// SSR it returns the defaults.
+Object.defineProperty(baseOptions, "fontFamily", {
+  enumerable: true,
+  get: () => loadAdminPrefs().editorFontFamily,
+});
+Object.defineProperty(baseOptions, "fontSize", {
+  enumerable: true,
+  get: () => loadAdminPrefs().editorFontSize,
 });
 
 /**
@@ -68,12 +90,11 @@ export function getRhinoEditorOptions(
   return {
     ...MONACO_BASE_OPTIONS,
     // Code editor appearance prefs. These override the hardcoded
-    // MONACO_BASE_OPTIONS values (tabSize:2, fontSize:13, minimap:off) for every
-    // Rhino/JS editor, and set stickyScroll/guides/renderWhitespace which the base
-    // leaves at Monaco's defaults. Placed before `...overrides` so per-editor
-    // options (e.g. readOnly) still win.
-    fontFamily: prefs.editorFontFamily,
-    fontSize: prefs.editorFontSize,
+    // MONACO_BASE_OPTIONS values (tabSize:2, minimap:off) for every Rhino/JS
+    // editor, and set stickyScroll/guides/renderWhitespace which the base leaves
+    // at Monaco's defaults. Placed before `...overrides` so per-editor options
+    // (e.g. readOnly) still win. fontFamily/fontSize are not repeated here — the
+    // base options now expose them as prefs-reading getters.
     tabSize: prefs.editorTabSize,
     insertSpaces: prefs.editorInsertSpaces,
     // Make the tab-size / tabs-vs-spaces prefs authoritative. Monaco's

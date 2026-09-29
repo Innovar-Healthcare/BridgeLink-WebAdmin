@@ -37,6 +37,7 @@ import { DataTable } from "@/components/data-table";
 import { useColumnConfig, type ColDef } from "@/lib/hooks/use-column-config";
 import { useSortable } from "@/lib/hooks/use-sortable";
 import { parsePropertiesText, serializeProperties } from "@/lib/configuration-map-properties";
+import { checkFileSize } from "@/lib/file-size-guard";
 
 // ─── Column definitions ──────────────────────────────────────────────────────
 
@@ -332,6 +333,12 @@ export function ConfigurationMapTab({
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      toast.error(tooLarge);
+      e.target.value = "";
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       const text = reader.result as string;

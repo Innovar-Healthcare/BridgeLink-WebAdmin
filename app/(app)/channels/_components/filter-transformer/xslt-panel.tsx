@@ -15,7 +15,6 @@ const labelCls = "text-sm text-gray-600 dark:text-gray-400 w-36 shrink-0 text-ri
 interface Props {
   step: XsltStep;
   onChange: (step: XsltStep) => void;
-  isDark: boolean;
   showErrors?: boolean;
 }
 
@@ -46,7 +45,7 @@ function inputDropProps(
   };
 }
 
-export function XsltPanel({ step, onChange, isDark, showErrors }: Props) {
+export function XsltPanel({ step, onChange, showErrors }: Props) {
   const { viewDensity } = useCompactMode();
   const inputCls =
     `${densityHeight(viewDensity)} px-3 text-sm rounded border border-border ` +
@@ -182,7 +181,6 @@ export function XsltPanel({ step, onChange, isDark, showErrors }: Props) {
           <MonacoEditor
             height="200px"
             language="xml"
-            theme={isDark ? "vs-dark" : "vs"}
             defaultValue={step.template ?? ""}
             beforeMount={handleBeforeMount}
             onMount={handleMount}

@@ -34,8 +34,9 @@ import {
   type GlobalScriptKey,
 } from "@/lib/api-client";
 import { ScriptReferencePanel } from "@/app/(app)/channels/_components/scripts-tab";
-import { CATEGORIES, isRefItemVisibleInContext } from "@/lib/reference-data";
+import { isRefItemVisibleInContext } from "@/lib/reference-data";
 import type { RefCategory } from "@/lib/reference-data";
+import { useScriptReferenceCatalog } from "@/lib/script-references-catalog";
 import { GlobalScriptsActionPanel } from "./_components/global-scripts-action-panel";
 import { useCompactMode, pagePadding } from "@/lib/hooks/use-compact-mode";
 import { useCodeTemplatesPrefetch } from "@/lib/hooks/use-cache";
@@ -43,7 +44,10 @@ import { pluginSlots } from "@/lib/plugin-slots";
 import { useSlotEnabled } from "@/lib/plugin-gating";
 import { scriptsSemanticallyEqual } from "@/lib/js-validation";
 import { cn } from "@/lib/utils";
-import { validateGlobalScript, validateAllGlobalScripts } from "@/lib/global-scripts-validation";
+import {
+  validateAllGlobalScripts,
+  validateGlobalScriptGated,
+} from "@/lib/global-scripts-validation";
 import { exportGlobalScriptsToXml, parseGlobalScriptsFromXml } from "@/lib/global-scripts-io";
 import { pickXmlFileText } from "@/lib/pick-file";
 import { downloadFile } from "@/lib/download";
@@ -123,6 +127,7 @@ function GlobalScriptsPageInner() {
   const [saved, setSaved] = useState<Record<GlobalScriptKey, string> | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<GlobalScriptKey>(startTab);
@@ -138,6 +143,10 @@ function GlobalScriptsPageInner() {
 
   // ── Reference panel ───────────────────────────────────────────────────────
 
+  // Reference catalog — server-derived when the connected Core supports it, frozen client
+  // catalog otherwise.
+  const catalog = useScriptReferenceCatalog();
+
   // Context-filtered categories for the active global script.
   // Mirrors Java ReferenceListFactory: each item is shown only when the active
   // script's ContextType is in the item's context set. isRefItemVisibleInContext
@@ -147,13 +156,14 @@ function GlobalScriptsPageInner() {
   // The "response" category is response-transformer-only — never relevant here.
   const scriptCategories = useMemo<RefCategory[]>(() => {
     const ctx = GLOBAL_SCRIPT_CONTEXT[activeTab];
-    return CATEGORIES.filter((cat) => cat.id !== "response")
+    return catalog
+      .filter((cat) => cat.id !== "response")
       .map((cat) => ({
         ...cat,
         items: cat.items.filter((item) => isRefItemVisibleInContext(item, ctx)),
       }))
       .filter((cat) => cat.items.length > 0);
-  }, [activeTab]);
+  }, [activeTab, catalog]);
 
   // Wire up drag-drop on a Monaco editor so reference items can be dragged in.
   function setupEditorDragDrop(editor: import("monaco-editor").editor.IStandaloneCodeEditor) {
@@ -237,20 +247,21 @@ function GlobalScriptsPageInner() {
   async function saveScripts(): Promise<boolean> {
     if (!scripts) return false;
 
-    const failures = validateAllGlobalScripts(scripts);
-    if (failures.length > 0) {
-      setSaveErr(null);
-      setValidateResult({
-        ok: false,
-        msg: failures.map((f) => `Error in global script "${f.key}": ${f.message}`).join("\n"),
-      });
-      return false;
-    }
-
     setSaving(true);
     setSaveErr(null);
     setValidateResult(null);
     try {
+      // Validation may be a server round-trip now, so it runs inside the
+      // saving state; a network failure here blocks the save (fail-safe).
+      const failures = await validateAllGlobalScripts(scripts);
+      if (failures.length > 0) {
+        setValidateResult({
+          ok: false,
+          msg: failures.map((f) => `Error in global script "${f.key}": ${f.message}`).join("\n"),
+        });
+        return false;
+      }
+
       await setGlobalScripts(scripts);
       setSaved({ ...scripts });
       return true;
@@ -273,7 +284,14 @@ function GlobalScriptsPageInner() {
   // export prompts to save first when there are unsaved changes.
 
   async function handleImport() {
-    const xml = await pickXmlFileText();
+    let xml: string | null;
+    try {
+      xml = await pickXmlFileText();
+    } catch (e) {
+      // Oversize pick — distinct from a cancelled picker, which resolves null.
+      toast.error(e instanceof Error ? e.message : String(e));
+      return;
+    }
     if (xml == null) return;
     try {
       const imported = parseGlobalScriptsFromXml(xml);
@@ -329,13 +347,23 @@ function GlobalScriptsPageInner() {
     setValidateResult(null);
   }
 
-  // validateGlobalScript parses E4X XML literals and neutralizes E4X operators, so real errors
-  // surface even in E4X scripts; forms it can't represent are deferred (returns null).
-  function handleValidate() {
+  // Validate the active script — server-side (real Rhino) when the Core supports it,
+  // else via the acorn fallback, which parses E4X XML literals and neutralizes E4X
+  // operators so real errors surface even in E4X scripts (deferring forms it can't
+  // represent)..
+  async function handleValidate() {
     if (!scripts) return;
-    const script = scripts[activeTab];
-    const err = validateGlobalScript(script);
-    setValidateResult(err ? { ok: false, msg: err } : { ok: true, msg: "No syntax errors found." });
+    setValidating(true);
+    try {
+      const err = await validateGlobalScriptGated(scripts[activeTab]);
+      setValidateResult(
+        err ? { ok: false, msg: err } : { ok: true, msg: "No syntax errors found." }
+      );
+    } catch (e) {
+      setValidateResult({ ok: false, msg: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setValidating(false);
+    }
   }
 
   // ── Script change ─────────────────────────────────────────────────────────
@@ -352,12 +380,13 @@ function GlobalScriptsPageInner() {
         position={toolbarPos}
         loading={loading}
         saving={saving}
+        validating={validating}
         anyDirty={anyDirty}
         hasScripts={scripts !== null}
         onRefresh={load}
         onImport={handleImport}
         onExport={handleExport}
-        onValidate={handleValidate}
+        onValidate={() => void handleValidate()}
         onSave={handleSave}
         onViewHistory={HistoryDialog && historyEnabled ? () => setHistoryOpen(true) : undefined}
         onCommit={

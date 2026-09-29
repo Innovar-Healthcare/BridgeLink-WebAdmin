@@ -20,6 +20,7 @@ import {
   extractApiErrorMessage,
 } from "./api-core";
 import { startOfDay, endOfDay } from "date-fns";
+import { parseMessageXml } from "./parse-message-xml";
 
 // ─── Messages ────────────────────────────────────────────────────────────────
 
@@ -241,7 +242,7 @@ function buildMessageFilterBody(filter: MessageFilter): Record<string, unknown> 
 export async function searchMessages(
   channelId: string,
   filter: MessageFilter,
-  options?: { offset?: number; limit?: number; includeContent?: boolean }
+  options?: { offset?: number; limit?: number; includeContent?: boolean; signal?: AbortSignal }
 ): Promise<Message[]> {
   const query = new URLSearchParams();
   if (options?.offset !== undefined) query.set("offset", String(options.offset));
@@ -251,6 +252,7 @@ export async function searchMessages(
   return request<Message[]>(`/channels/${channelId}/messages/_search?${query.toString()}`, {
     method: "POST",
     body: JSON.stringify(buildMessageFilterBody(filter)),
+    signal: options?.signal,
   });
 }
 
@@ -260,82 +262,19 @@ export async function searchMessages(
  */
 export async function searchMessageCount(
   channelId: string,
-  filter: MessageFilter
+  filter: MessageFilter,
+  signal?: AbortSignal
 ): Promise<number> {
   return request<number>(`/channels/${channelId}/messages/count/_search`, {
     method: "POST",
     body: JSON.stringify(buildMessageFilterBody(filter)),
+    signal,
   });
 }
 
 /** Get the maximum message ID for a channel (used to bound search results). */
 export async function getMaxMessageId(channelId: string): Promise<number> {
   return request<number>(`/channels/${channelId}/messages/maxMessageId`);
-}
-
-/**
- * Normalize ConnectorMessage map fields.
- * Java field names are `sourceMapContent`, `connectorMapContent`, etc. — each is a
- * MapContent object wrapping a TreeMap<String, Object>.
- *
- * The raw XStream JSON looks like:
- *   sourceMapContent: { content: { "@class": "sorted-map", "entry": [...] }, encrypted: false }
- *
- * After the first normalizeXStream pass the map entries may or may not have been fully
- * flattened, depending on whether the @class="sorted-map" was recognized.
- * This function:
- *   1. Extracts the inner content from the MapContent wrapper
- *   2. Re-runs normalizeXStream on the extracted data to ensure map entries are flattened
- *   3. Renames from Java field name (sourceMapContent) to TS field name (sourceMap)
- */
-function normalizeConnectorMessage(cm: Record<string, unknown>): void {
-  if (!cm || typeof cm !== "object") return;
-
-  // ── Map content fields (sourceMapContent → sourceMap, etc.) ──
-  const MAP_FIELDS = [
-    { java: "sourceMapContent", ts: "sourceMap" },
-    { java: "connectorMapContent", ts: "connectorMap" },
-    { java: "channelMapContent", ts: "channelMap" },
-    { java: "responseMapContent", ts: "responseMap" },
-  ] as const;
-  for (const { java, ts } of MAP_FIELDS) {
-    const wrapper = cm[java];
-    if (wrapper && typeof wrapper === "object") {
-      const wrapperObj = wrapper as Record<string, unknown>;
-      // MapContent has a "content" field that holds the actual map.
-      // The "content" may be a normalized plain object, or still an XStream map
-      // (with entry/@@class) if the first normalize pass didn't fully process it.
-      const inner = wrapperObj.content ?? wrapper;
-      // If inner still looks like an XStream map structure, re-normalize it
-      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
-        const innerObj = inner as Record<string, unknown>;
-        let normalized: unknown = innerObj;
-        if (innerObj["@class"] || innerObj["entry"] != null) {
-          normalized = normalizeXStream(innerObj);
-        }
-        cm[ts] = normalized;
-      }
-    }
-    if (java in cm) delete cm[java];
-  }
-
-  // ── Error content fields (processingErrorContent → processingError, etc.) ──
-  // Server sends ErrorContent wrappers: { content: "error text", persisted: bool }
-  // Extract the inner string so hasErrors() in content-viewer can detect them.
-  const ERROR_FIELDS = [
-    { java: "processingErrorContent", ts: "processingError" },
-    { java: "postProcessorErrorContent", ts: "postProcessorError" },
-    { java: "responseErrorContent", ts: "responseError" },
-  ] as const;
-  for (const { java, ts } of ERROR_FIELDS) {
-    const wrapper = cm[java];
-    if (wrapper && typeof wrapper === "object") {
-      const wrapperObj = wrapper as Record<string, unknown>;
-      const text = wrapperObj.content ?? null;
-      if (text != null) cm[ts] = text;
-    }
-    if (java in cm) delete cm[java];
-  }
 }
 
 export async function getMessage(
@@ -347,30 +286,26 @@ export async function getMessage(
   // content; its only query param is metaDataId (repeated per connector). When no ids are
   // supplied the server returns all connectors. (The includeContent param belongs to the
   // message-list endpoint GET /channels/{channelId}/messages, not this single-message path.)
+  //
+  // Fetched as XStream XML, not JSON: Staxon's autoPrimitive rewrites numeric-looking
+  // <content> text into a JSON number, irreversibly mangling it (e.g. "10e33" → 1.0E+34)
+  // and crashing the viewer, same class as the channel-tag/config-map fix in
+  ///. XML carries each content field's literal bytes — matching what the
+  // Java client's SDK deserializes into Message objects. parseMessageXml produces the same
+  // normalized shape the JSON path used to (connectorMessages keyed by metaDataId; map
+  // fields via the shared normalizeXStream; error fields as strings).
   const query =
     metaDataIds && metaDataIds.length > 0
       ? `?${metaDataIds.map((id) => `metaDataId=${id}`).join("&")}`
       : "";
-  const raw = await request<unknown>(`/channels/${channelId}/messages/${messageId}${query}`);
-  // Unwrap the {"message": {...}} XStream wrapper if present
-  let msg: Record<string, unknown>;
-  if (
-    raw &&
-    typeof raw === "object" &&
-    "message" in (raw as Record<string, unknown>) &&
-    !("messageId" in (raw as Record<string, unknown>))
-  ) {
-    msg = (raw as Record<string, unknown>).message as Record<string, unknown>;
-  } else {
-    msg = raw as Record<string, unknown>;
-  }
-  // Normalize map fields in each connector message
-  if (msg?.connectorMessages && typeof msg.connectorMessages === "object") {
-    for (const cm of Object.values(msg.connectorMessages as Record<string, unknown>)) {
-      normalizeConnectorMessage(cm as Record<string, unknown>);
-    }
-  }
-  return msg as unknown as Message;
+  const xml = await request<string>(`/channels/${channelId}/messages/${messageId}${query}`, {
+    headers: { Accept: "application/xml" },
+    rawText: true,
+  });
+  // An empty/204 body means the message was removed between search and open
+  // (prune or another client) — surface that rather than a confusing parse error.
+  if (!xml) throw new Error("Message no longer exists.");
+  return parseMessageXml(xml);
 }
 
 /**
@@ -596,11 +531,13 @@ export async function removeMessage(
 /** Remove messages matching a filter. POST /{channelId}/messages/_remove */
 export async function removeMessagesByFilter(
   channelId: string,
-  filter: MessageFilter
+  filter: MessageFilter,
+  signal?: AbortSignal
 ): Promise<void> {
   await request<void>(`/channels/${channelId}/messages/_remove`, {
     method: "POST",
     body: JSON.stringify(buildMessageFilterBody(filter)),
+    signal,
   });
 }
 

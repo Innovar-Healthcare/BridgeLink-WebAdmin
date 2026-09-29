@@ -282,6 +282,25 @@ export async function getFixtureShortCircuit(
     return { status: 200, contentType: "application/xml", body: xml };
   }
 
+  // GET /extensions/{name}/webadmin/datatype-defaults/{dataTypeName}
+  if (
+    method === "GET" &&
+    segments.length === 5 &&
+    segments[2] === "webadmin" &&
+    segments[3] === "datatype-defaults"
+  ) {
+    const extensions = await scanFixtureExtensions();
+    const ext = extensions.find((e) => e.name === segments[1]);
+    if (!ext) return null;
+    const xml = await readFixtureFile([ext.dirName, "datatype-defaults", `${segments[4]}.xml`]);
+    if (xml === null) {
+      return jsonResponse(404, {
+        error: `No default properties fixture for data type "${segments[4]}"`,
+      });
+    }
+    return { status: 200, contentType: "application/xml", body: xml };
+  }
+
   // GET/POST /extensions/{path}/webadmin/actions/{action} — canned responses
   // for declared action buttons. Matched on the extension PATH (the action
   // endpoint namespace), unlike enabled/defaults which are name-based.

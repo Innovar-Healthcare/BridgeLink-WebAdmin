@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getDatabaseDrivers, setDatabaseDrivers } from "../api/api-database";
+import { registerCacheTeardown } from "@/lib/logout";
 import type { DriverInfo } from "../types";
 
 // ─── Module-level singleton cache ─────────────────────────────────────────────
@@ -15,12 +16,26 @@ interface DriverStore {
   fetched: boolean;
 }
 
-let store: DriverStore = {
-  drivers: [],
-  loading: false,
-  error: "",
-  fetched: false,
-};
+function emptyStore(): DriverStore {
+  return { drivers: [], loading: false, error: "", fetched: false };
+}
+
+let store: DriverStore = emptyStore();
+
+/**
+ * Drop the cached driver list so the next mount re-fetches. Registered as a session
+ * teardown (login/logout/401) — the list is server state and must not survive into
+ * another user's session.
+ *
+ * Deliberately does not notify listeners: teardown runs while the app tree is still
+ * mounted, and the mount effect below has `[]` deps, so a re-render could not re-fetch
+ * anyway — it would only risk rendering against a dead session.
+ */
+export function clearDatabaseDriversCache(): void {
+  store = emptyStore();
+}
+
+registerCacheTeardown(clearDatabaseDriversCache);
 
 type Listener = () => void;
 const listeners = new Set<Listener>();

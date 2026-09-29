@@ -3,9 +3,12 @@ import type { BeforeMount } from "@monaco-editor/react";
 let hl7v2Registered = false;
 
 /**
- * Monaco BeforeMount hook that registers the hl7v2 custom language and
- * light/dark themes once per page load. Safe to pass to multiple <Editor>
- * instances — subsequent calls are no-ops.
+ * Monaco BeforeMount hook that registers the hl7v2 custom language once per page
+ * load. Safe to pass to multiple <Editor> instances — subsequent calls are no-ops.
+ *
+ * The `hl7-*` colors live in `lib/monaco-theme.ts`, not here: Monaco themes are
+ * global per instance, so the app defines exactly one. Keep the token
+ * names below in step with that module's HL7V2 rules.
  */
 export const registerHl7v2Language: BeforeMount = (monaco) => {
   if (hl7v2Registered) return;
@@ -33,39 +36,4 @@ export const registerHl7v2Language: BeforeMount = (monaco) => {
       ],
     },
   });
-
-  monaco.editor.defineTheme("hl7v2-theme", {
-    base: "vs",
-    inherit: true,
-    rules: [
-      { token: "hl7-segment", foreground: "0000FF", fontStyle: "bold" },
-      { token: "hl7-pipe", foreground: "999999" },
-      { token: "hl7-caret", foreground: "CC7700" },
-      { token: "hl7-tilde", foreground: "CC00CC" },
-      { token: "hl7-amp", foreground: "009999" },
-      { token: "hl7-escape", foreground: "AA0000", fontStyle: "italic" },
-      { token: "hl7-value", foreground: "333333" },
-    ],
-    colors: {},
-  });
-
-  monaco.editor.defineTheme("hl7v2-dark-theme", {
-    base: "vs-dark",
-    inherit: true,
-    rules: [
-      { token: "hl7-segment", foreground: "79B8FF", fontStyle: "bold" },
-      { token: "hl7-pipe", foreground: "6A737D" },
-      { token: "hl7-caret", foreground: "E6A445" },
-      { token: "hl7-tilde", foreground: "FF79C6" },
-      { token: "hl7-amp", foreground: "56C8C8" },
-      { token: "hl7-escape", foreground: "F97070", fontStyle: "italic" },
-      { token: "hl7-value", foreground: "CDD5DE" },
-    ],
-    colors: {},
-  });
 };
-
-/** Returns the correct Monaco theme name for HL7v2 content. */
-export function hl7v2Theme(isDark: boolean): string {
-  return isDark ? "hl7v2-dark-theme" : "hl7v2-theme";
-}

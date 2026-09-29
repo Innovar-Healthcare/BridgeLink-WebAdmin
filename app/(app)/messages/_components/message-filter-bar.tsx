@@ -91,10 +91,11 @@ export interface MessageFilterBarProps {
   onSearch: () => void;
   onReset: () => void;
   loading: boolean;
-  /** False while getMetaDataColumns is in-flight for the selected channel. Manual
-   *  Search is disabled until true so isCURESPHILoggingOn is final before the
-   *  PHI query audit decision is made. */
-  metaColumnsReady: boolean;
+  /** False until getMetaDataColumns has settled for the *currently selected* channel. Manual
+   *  Search is disabled until true so isCURESPHILoggingOn is final before the PHI query audit
+   *  decision is made, and so the metadata-search rows have been reconciled against this
+   *  channel's columns rather than the previous one's. */
+  metaColumnsLoaded: boolean;
   hasActiveFilters: boolean;
 
   // Page size
@@ -141,7 +142,7 @@ export function MessageFilterBar({
   onSearch,
   onReset,
   loading,
-  metaColumnsReady,
+  metaColumnsLoaded,
   hasActiveFilters,
   pageSizeInput,
   onPageSizeInputChange,
@@ -357,7 +358,7 @@ export function MessageFilterBar({
           <Button
             size="sm"
             onClick={onSearch}
-            disabled={loading || !selectedChannelId || !metaColumnsReady}
+            disabled={loading || !selectedChannelId || !metaColumnsLoaded}
             className="h-8"
           >
             <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? "animate-spin" : ""}`} />
@@ -419,7 +420,7 @@ export function MessageFilterBar({
               size="sm"
               className="h-6 text-xs px-2"
               onClick={onCount}
-              disabled={countLoading || !hasFilter}
+              disabled={countLoading || !hasFilter || totalCount !== null}
             >
               {countLoading ? (
                 <Loader2 className="w-3 h-3 mr-1 animate-spin" />

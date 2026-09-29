@@ -122,10 +122,31 @@ export interface DestinationPluginDefinition {
   /** Client-side validation. Returns array of field-level errors, or empty array if valid. */
   validate?: (propertiesXml: string | null) => ValidationError[];
   /**
+   * Structural-only validation for the channel Save/Enable trust gate; the JS script (if any) is
+   * contributed via {@link getScript} and resolved through the server batch. Falls back to
+   * {@link validate}. Mirrors the source `ConnectorPluginDefinition.validateNonScript`.
+   * No destination plugin implements JS validation today; declared for loop symmetry.
+   */
+  validateNonScript?: (propertiesXml: string | null) => ValidationError[];
+  /**
+   * The JavaScript source this plugin contributes to server-side syntax validation, or `null`.
+   * Mirrors the source `ConnectorPluginDefinition.getScript`.
+   */
+  getScript?: (propertiesXml: string | null) => string | null;
+  /**
    * True when this plugin secures the destination's transport with TLS for the given properties.
    * Mirrors the source `ConnectorPluginDefinition.securesTransport`. DestinationTab ORs this across
    * the applicable plugins into `DestinationConnectorSectionProps.securesTransport`, which HTTP/WS
    * Sender use to suppress the "(SSL Not Configured)" warning on https URLs.
    */
   securesTransport?: (propertiesXml: string | null) => boolean;
+  /**
+   * The `<pluginProperties>` child element this section owns (its FQN tag),
+   * when the section binds to exactly one such element. The registry drops a
+   * later registrant claiming an already-claimed element (first-wins) — two
+   * sections writing the same element would silently corrupt each other.
+   * Set by the runtime plugin loader; compiled-in sections manage
+   * their own elements and may omit it.
+   */
+  ownedElementClass?: string;
 }

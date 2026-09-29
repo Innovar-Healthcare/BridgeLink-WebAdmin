@@ -79,9 +79,10 @@ export const ADMIN_PREFS_DEFAULTS: AdminPrefs = {
   themeColorPlacement: "top-strip",
   zebraRows: false,
   checkForUpdates: true,
-  // Code editor appearance. The font stack mirrors the pre-existing
-  // MONACO_BASE_OPTIONS default. tabSize defaults to 4 per the ticket (the Java
-  // client's RSyntaxTextArea tab size is 4); insertSpaces defaults to spaces.
+  // Code editor appearance. MONACO_BASE_OPTIONS reads this stack via a
+  // getter, so it is the single source of truth for every editor's font
+  //. tabSize defaults to 4 per the ticket (the Java client's
+  // RSyntaxTextArea tab size is 4); insertSpaces defaults to spaces.
   editorFontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace",
   editorFontSize: 13,
   editorTabSize: 4,
@@ -91,6 +92,14 @@ export const ADMIN_PREFS_DEFAULTS: AdminPrefs = {
   editorIndentGuides: true,
   editorRenderWhitespace: false,
 };
+
+/**
+ * The exact `editorFontFamily` value of the "Cascadia Code" option removed in
+ *. Retained only so `loadAdminPrefs()` can migrate a stored copy off it;
+ * do not reintroduce it as a selectable option without resolving the OFL Reserved
+ * Font Name question first (see components/settings/admin-tab.tsx).
+ */
+const REMOVED_CASCADIA_FONT_STACK = "'Cascadia Code', Menlo, Consolas, monospace";
 
 // Raw-string-fingerprint cache. Monaco editors call loadAdminPrefs() on every
 // render (one per editor × multiple renders per keystroke), so skipping
@@ -118,9 +127,19 @@ export function loadAdminPrefs(): AdminPrefs {
   } catch {
     next = { ...ADMIN_PREFS_DEFAULTS };
   }
-  //: the "sidebar" placement was removed; migrate any persisted value to the default.
+  // the "sidebar" placement was removed; migrate any persisted value to the default.
   if ((next.themeColorPlacement as string) === "sidebar") {
     next.themeColorPlacement = "top-strip";
+  }
+  // the "Cascadia Code" font option was removed (its OFL Reserved Font
+  // Name forbids shipping a webfont subset under that name), so it is the one
+  // face the app cannot self-host. Migrate the stack it stored back to the
+  // default — otherwise the Settings Select has no matching item and renders a
+  // blank trigger. Note this only rewrites the removed *option's* exact value;
+  // the default stack still lists 'Cascadia Code' as a fallback, which merely
+  // picks it up for users who have it installed locally and ships nothing.
+  if (next.editorFontFamily === REMOVED_CASCADIA_FONT_STACK) {
+    next.editorFontFamily = ADMIN_PREFS_DEFAULTS.editorFontFamily;
   }
   _cachedRaw = raw;
   _cachedPrefs = next;

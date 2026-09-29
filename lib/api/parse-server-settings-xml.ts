@@ -129,6 +129,8 @@ export function parseServerSettingsFromXml(xml: string): ServerSettings {
   // ── Integer fields. ──
   const queueBufferSize = childInt(root, "queueBufferSize");
   if (queueBufferSize !== undefined) s.queueBufferSize = queueBufferSize;
+  const channelStopGracePeriod = childInt(root, "channelStopGracePeriod");
+  if (channelStopGracePeriod !== undefined) s.channelStopGracePeriod = channelStopGracePeriod;
   const autoLogoutField = childInt(root, "administratorAutoLogoutIntervalField");
   if (autoLogoutField !== undefined) s.administratorAutoLogoutIntervalField = autoLogoutField;
 

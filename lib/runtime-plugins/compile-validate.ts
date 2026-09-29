@@ -23,11 +23,14 @@ import type { ValidationError } from "@/app/(app)/channels/_connectors/shared/va
 import { evaluateCondition } from "./condition-eval";
 import { boundedRegexTest } from "./safe-regex";
 import { readFieldValues } from "./xml-field-binding";
-import type {
-  ConnectorPanelContribution,
-  FieldDescriptor,
-  SettingsPanelContribution,
+import {
+  COLLECTION_FIELD_TYPES,
+  type ConnectorPanelContribution,
+  type FieldDescriptor,
+  type SettingsPanelContribution,
 } from "./manifest-types";
+
+const COLLECTION_TYPES = new Set<string>(COLLECTION_FIELD_TYPES);
 
 function panelFields(
   panel: ConnectorPanelContribution | SettingsPanelContribution
@@ -97,7 +100,10 @@ export function compileConnectorValidator(
   panel: ConnectorPanelContribution
 ): (propertiesXml: string | null) => ValidationError[] {
   const fields = panelFields(panel);
-  const keys = fields.map((f) => f.key);
+  // Collection fields carry no validation rules (the validator forbids them) and
+  // their container element has no scalar text value — exclude their keys so
+  // readFieldValues never mashes a container's child text into a bogus value.
+  const keys = fields.filter((f) => !COLLECTION_TYPES.has(f.type)).map((f) => f.key);
   return (propertiesXml) => validateFieldValues(fields, readFieldValues(propertiesXml, keys));
 }
 

@@ -48,6 +48,22 @@ const eslintConfig = defineConfig([
       ],
     },
   },
+  // No console.log in production code (CLAUDE.md rule; previously unenforced).
+  // console.warn/console.error stay allowed — they are the intentional signal
+  // channels. Infra with legitimate stdout logging (server.ts, e2e/, scripts/,
+  // work-queue's bench CLI, tests) is outside the covered paths or ignored.
+  {
+    files: ["app/**", "components/**", "lib/**", "plugins/**"],
+    // plugins/.github/** is the commercial overlay's own CI tooling (check-surefire.mjs),
+    // where stdout IS the output — same category as the bench CLI above. It only became
+    // reachable when added the first .mjs there, and it fails nowhere but a
+    // workstation with the overlay wired: commercial CI lints an assembled tree that never
+    // copies .github, and this repo's CI has no overlay at all.
+    ignores: ["plugins/**/bench/**", "plugins/__tests__/**", "plugins/.github/**"],
+    rules: {
+      "no-console": ["error", { allow: ["warn", "error"] }],
+    },
+  },
   // Monaco editors must render through the MonacoEditor wrapper, which applies the
   // per-editor registrations every editor needs (working context-menu Paste —
   ///. Only the default export (the raw Editor component) is

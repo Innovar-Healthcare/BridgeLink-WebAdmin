@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schemas.bridgelink.online/webadmin-plugin/v2.json",
+  "manifestVersion": 2,
+  "transformerSteps": [
+    {
+      "name": "Mock Note",
+      "stepClass": "com.innovarhealthcare.connect.plugins.mocknotestep.MockNoteStep",
+      "contexts": ["source", "destination"],
+      "fields": [
+        {
+          "key": "noteVariable",
+          "type": "text",
+          "label": "Variable",
+          "tooltip": "Map variable the note is stored under.",
+          "defaultValue": "note",
+          "validation": [
+            { "rule": "required" },
+            {
+              "rule": "pattern",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "message": "Variable must be a valid identifier."
+            }
+          ]
+        },
+        {
+          "key": "scope",
+          "type": "select",
+          "label": "Scope",
+          "defaultValue": "channel",
+          "options": [
+            { "value": "channel", "label": "Channel Map" },
+            { "value": "global", "label": "Global Map" }
+          ]
+        },
+        {
+          "key": "useCustomScript",
+          "type": "checkbox",
+          "label": "Use Custom Script",
+          "defaultValue": "false"
+        },
+        {
+          "key": "script",
+          "type": "javascript",
+          "label": "Custom Script",
+          "tooltip": "Runs on the engine at message time when the note is built.",
+          "visibleWhen": { "field": "useCustomScript", "op": "truthy" },
+          "validation": [
+            { "rule": "required", "message": "Custom Script cannot be empty when enabled." }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -39,6 +39,13 @@ export interface LoginResult {
   mfa?: {
     username: string;
     hasSecret: boolean;
+    /**
+     * Single-use nonce issued by the server for this password-authenticated leg.
+     * It must be echoed back verbatim in the leg-2 login-data payload; the server
+     * consumes it before branching to setup/otp, so a missing or stale nonce fails
+     * the MFA login. Mirrors Java's MfaChallengeClient.
+     */
+    nonce: string;
   };
 }
 
@@ -57,12 +64,20 @@ function parseLoginResponse(text: string): LoginResult {
     const status = String(extended.status ?? "FAIL");
     const rawMessage = String(extended.message ?? "{}");
     try {
-      const msg = JSON.parse(rawMessage) as { username?: string; hasSecret?: boolean };
+      const msg = JSON.parse(rawMessage) as {
+        username?: string;
+        hasSecret?: boolean;
+        nonce?: string;
+      };
       if (msg.username !== undefined) {
         return {
           status,
           message: rawMessage,
-          mfa: { username: msg.username, hasSecret: Boolean(msg.hasSecret) },
+          mfa: {
+            username: msg.username,
+            hasSecret: Boolean(msg.hasSecret),
+            nonce: msg.nonce ?? "",
+          },
         };
       }
     } catch {
@@ -136,16 +151,19 @@ export async function login(
 
 /**
  * Second leg of the MFA login flow.
- * Sends the MFA response (setup secret or OTP code) via the X-Mirth-Login-Data header.
+ * Sends the MFA response (setup secret or OTP code) via the X-Mirth-Login-Data header,
+ * along with the single-use `nonce` the server issued in the leg-1 challenge — the
+ * server requires and consumes it before branching to setup/otp.
  * Mirrors Java's MfaChallengeClient.authenticate() second login call.
  */
 export async function loginWithMfaData(
   serverUrl: string,
   username: string,
   action: "setup" | "otp",
-  response: string
+  response: string,
+  nonce: string
 ): Promise<LoginResult> {
-  const loginData = JSON.stringify({ username, action, response });
+  const loginData = JSON.stringify({ username, action, response, nonce });
   const res = await fetch(`${PROXY_BASE}/users/_login`, {
     method: "POST",
     headers: {

@@ -1,5 +1,167 @@
 # Release Notes
 
+## 26.9.0 (September 30, 2026)
+
+This release lets server extensions add their own screens to the Web Administrator
+with a JSON manifest, adds diagnostics for channels stuck stopping or starting, and
+moves several editor checks onto the server so they match the engine exactly. It
+also includes security hardening and a long list of fixes that bring behavior in
+line with the Java administrator.
+
+**Before you upgrade,** read [Upgrade notes](#upgrade-notes) if you use
+multi-factor login, run behind a reverse proxy without a configured server URL, set a TLS certificate or
+`BRIDGELINK_CA_CERT` in `webadmin.conf`, or use DICOM connectors.
+
+---
+
+### Highlights
+
+- **Declarative plugins.** A server extension can now add Web Administrator UI by
+  shipping a `webadmin.json` manifest: connector and settings panels, transmission
+  modes, sections inside other connectors, filter and transformer steps, data
+  types, and map, list, and table fields. The Web Administrator draws the manifest
+  with its own form components, so no plugin code runs in the browser. See
+  [Declarative plugins](./plugins/DECLARATIVE-PLUGINS.md).
+- **Manifest Preview.** Plugin authors can paste a manifest and see it rendered live,
+  with working examples and a built-in reference. Open **Extensions** and choose
+  **Manifest Preview**.
+- **Stuck-channel diagnostics.** The Dashboard flags a channel that has been
+  Stopping or Starting longer than the server's stop grace period. The new
+  **Thread Diagnostics** dialog shows what each of the channel's threads is doing
+  and what the last stop or halt was waiting on, and copies the report as text
+  for a support ticket. It contains thread names and stack frames, never message content.
+  Settings > Server gains a stop grace period setting, and Halt now asks for
+  confirmation.
+- **Editor checks that match the engine.** JavaScript validation, cron expression
+  checks and next-fire-time previews, the message tree preview, the script
+  reference list and autocomplete, and built-in connector defaults now come from
+  the server, so they agree with what the engine will actually do.
+- **Message template Preview.** The Message Templates tab has a **Preview** button
+  that shows a template with its `${...}` variables resolved.
+
+### Improvements
+
+- **Config Search.** Back returns to your results. Opening a match goes to the
+  exact filter rule or transformer step and line. Mapper, Message Builder, Rule
+  Builder, XSLT, External Script, and Destination Set Filter steps, and scripts
+  inside Iterators, are now searched, so expect more results than before.
+- **New channel in a group.** Right-click a group, or a channel inside one, and
+  choose **New Channel** to create the channel directly in that group.
+- **Message Browser.** A **Line Endings** toggle shows each line's CR/LF characters
+  in the content viewer. Paging and result counts now match the Java administrator.
+- **Flow View.** The filter and transformer badges on connector cards open the
+  matching editor.
+- **Code editor.** JSDoc comment blocks are highlighted separately from ordinary
+  comments. The Font setting now takes effect: JetBrains Mono, Fira Code, and
+  Cascadia Code ship with the application.
+- **Channel scripts.** The Scripts tabs now read Deploy, Undeploy, Preprocessor,
+  Postprocessor and open on Deploy, as in the Java administrator.
+- **Export.** Exporting several channels or groups follows the "Export code
+  template libraries with channels" preference instead of always asking.
+- **Backup and restore.** Server backups record their date. Restore checks the
+  file first and refuses a backup made by a newer BridgeLink version.
+- **Lookup Manager.** Values whose key contains `/`, `%`, or `\` can now be viewed,
+  edited, and deleted.
+- **Login.** When the server is set by configuration, the login page says so under
+  the read-only Server field.
+- **Licensed plugins.** A plugin page your license does not cover shows an upgrade
+  prompt.
+- **Narrow windows.** The Export Results and Import Message dialogs now fit at
+  split-screen widths.
+
+### Fixes
+
+- Uninstalling an extension now removes it. Before, it came back after a server
+  restart.
+- JavaScript validation no longer rejects valid regular expressions such as
+  `(?::...)`, or regex and string literals inside template literals.
+- The Attachment Handler's **Validate JS** button checks the current script, not
+  the previous version.
+- Message content that looks like a number (for example `10e33`) is shown exactly
+  as stored.
+- Code template import allows two templates with the same name in different
+  libraries.
+- Deleting a tag that is in use as a Dashboard or Channels filter no longer leaves
+  a filter you cannot clear.
+- Switching channels in the Message Browser drops metadata search criteria the new
+  channel does not have, instead of failing the search.
+- Lookup Advanced Search no longer offers Contains and Not Contains, which the
+  server does not support.
+- Undeploy is disabled when any selected channel cannot be undeployed, instead of
+  undeploying only some of them.
+- Settings > Resources no longer re-sorts the table while you type, keeps the
+  settings of resource types it does not recognize, and validates the Default
+  Resource directory.
+- The Columns menu is no longer cut off when the message detail pane is docked.
+- Message Browser **Export CSV** and **Export Results** to My Computer are now
+  recorded in the server's audit log, like exports to the server.
+- A server on a newer patch of the same release line (for example 26.9.1) no
+  longer triggers the "newer than this build" notice.
+- On a server older than 26.9, a plugin that declares a data type keeps its other
+  screens. The Extensions page explains why the data type is unavailable.
+- A user whose password is in its grace period can change it from the Web
+  Administrator when the server restricts grace-period sessions.
+
+### Security
+
+- CSV exports neutralize spreadsheet formulas, so a cell starting with `=`, `+`,
+  `-`, or `@` cannot run as a formula when the file is opened in Excel.
+- In same-host mode, the Web Administrator no longer trusts the request's `Host`
+  header by default when choosing which BridgeLink server to connect to (see
+  [Upgrade notes](#upgrade-notes)).
+- The first login on a new install requires setting a new password.
+- Importing messages from your computer enforces limits: 100 MB per file,
+  500 MB unpacked in total, and 100,000 entries per archive.
+- Logging out clears all cached server data from the browser.
+- Multi-factor login supports the single-use check that BridgeLink 26.9 servers
+  require.
+- Critical and high-severity advisories in production dependencies are resolved.
+
+---
+
+### Upgrade notes
+
+- **Multi-factor login: upgrade the Web Administrator first.** A 26.9.0 server
+  requires a single-use check that Web Administrator 26.6.0 does not send, so
+  26.6.0 cannot complete a multi-factor login against it. Upgrade the Web
+  Administrator before, or together with, the server. Password-only logins are
+  not affected.
+- **Same-host mode behind a reverse proxy.** This applies only if you set neither
+  `BRIDGELINK_SERVER_URL` nor `BRIDGELINK_ALLOWED_SERVERS`. The Web Administrator
+  no longer derives the server from the `Host` header. Set `BRIDGELINK_PUBLIC_HOST`
+  (recommended) or `BRIDGELINK_SERVER_URL`. Set `TRUST_PROXY_HOST=true` only if
+  your proxy pins the `Host` header.
+- **TLS certificate in `webadmin.conf`.** `SSL_CERT_FILE` and `SSL_KEY_FILE` set in
+  `webadmin.conf` were previously ignored, and a self-signed certificate was
+  served. They are now used. Check that both paths point to valid files before
+  you upgrade.
+- **`BRIDGELINK_CA_CERT` on the Windows service.** This setting in `webadmin.conf`
+  was previously ignored on the Windows service. It is now enforced. If the
+  certificate does not match your BridgeLink server, every login fails until you
+  correct it.
+- **DICOM timeouts.** Five DICOM Listener and Sender timeout fields were labeled
+  in seconds, but the engine has always read them as milliseconds. The labels now
+  say milliseconds. Your saved values are unchanged, so check any value that was
+  entered as seconds: `30` means 30 milliseconds.
+- **Config Search** returns more matches than before, because more step types are
+  searched.
+
+### Compatibility
+
+- **BridgeLink server:** 26.3.0 or newer, unchanged from 26.6.0.
+- **Features that need a 26.9.0 server:** stuck-channel diagnostics, message template
+  Preview, server-side editor checks, Lookup keys containing `/`, `%`, or `\`, and
+  declarative data types and some other plugin features (see
+  [Declarative plugins](./plugins/DECLARATIVE-PLUGINS.md)). On an older server,
+  these features are hidden or fall back to the 26.6 behavior.
+- **Node.js:** 22.x for the tarball and zip installs, unchanged.
+- **Browsers:** current versions of Chrome, Edge, Firefox, and Safari.
+
+When reporting a bug, please include the build identifier (`26.9.0`). See
+[Getting help](#getting-help).
+
+---
+
 ## 26.6.0 — General Availability (July 20, 2026)
 
 This is the first general-availability release of **BridgeLink Web

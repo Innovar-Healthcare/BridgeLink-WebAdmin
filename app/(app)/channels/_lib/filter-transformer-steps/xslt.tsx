@@ -41,15 +41,8 @@ function accumulatorName(step: XsltStep): string {
   return `_${convertIdentifier(step.resultVariable)}`;
 }
 
-function XsltStepEditor({
-  step,
-  onChange,
-  isDark,
-  showErrors,
-}: TransformerStepEditorProps<XsltStep>) {
-  return (
-    <XsltPanel step={step} onChange={onChange} isDark={isDark ?? false} showErrors={showErrors} />
-  );
+function XsltStepEditor({ step, onChange, showErrors }: TransformerStepEditorProps<XsltStep>) {
+  return <XsltPanel step={step} onChange={onChange} showErrors={showErrors} />;
 }
 
 export const XsltStepDefinition: TransformerStepDefinition<XsltStep> = {

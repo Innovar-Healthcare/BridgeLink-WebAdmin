@@ -348,7 +348,7 @@ export interface PagePlugin {
  * this contract generic and editing the commercial overlay; deferred post-GA.
  */
 export interface PluginTabProps {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any --: stable cross-repo wire contract; `any` is the only type that keeps both the typed (oidc/ssl) and loose (access-control/anchor/siem/license-manager) plugin-tab camps assignable under contravariant ref checks. Structural fix needs a generic contract + commercial overlay edits; deferred post-GA.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stable cross-repo wire contract; `any` is the only type that keeps both the typed (oidc/ssl) and loose (access-control/anchor/siem/license-manager) plugin-tab camps assignable under contravariant ref checks. Structural fix needs a generic contract + commercial overlay edits; deferred post-GA.
   actionsRef?: React.MutableRefObject<any>;
   onActionsChanged?: () => void;
   /**
@@ -405,7 +405,7 @@ export interface SettingsPluginTab {
    * panel. Narrowing it requires making this contract generic and editing the
    * commercial overlay; deferred post-GA.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any --: stable cross-repo wire contract; each plugin panel has its own required props, so no single non-`any` `ComponentType` slot accepts every panel under contravariant checks. Structural fix needs a generic contract + commercial overlay edits; deferred post-GA.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- stable cross-repo wire contract; each plugin panel has its own required props, so no single non-`any` `ComponentType` slot accepts every panel under contravariant checks. Structural fix needs a generic contract + commercial overlay edits; deferred post-GA.
   actionPanel: ComponentType<any> | null;
   /** RBAC permission key — tab hidden when "No Permission". e.g. "Settings.Data Pruner" */
   permissionKey?: string;

@@ -1,0 +1,6 @@
+{
+  "name": "SSL Demo Connector",
+  "path": "ssl-style",
+  "version": "0.9.0",
+  "enabled": true
+}

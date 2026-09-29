@@ -23,7 +23,12 @@ import { ExportChannelDialog } from "../_dialogs/export-channel-dialog";
 import { ChannelEditorTabContent } from "./channel-editor-tab-content";
 import { useChannelEditor } from "../_lib/use-channel-editor";
 import { countNonDefaultScripts } from "../_lib/channel-xml";
-import { TAB_LABELS, type EditorTab, type ChannelEditorCoreProps } from "./channel-editor-types";
+import {
+  TAB_LABELS,
+  type EditorTab,
+  type ChannelEditorCoreProps,
+  type FtView,
+} from "./channel-editor-types";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { TabSelection } from "./channel-editor-tab-content";
 
@@ -68,6 +73,24 @@ export function ChannelEditorCore(props: ChannelEditorCoreProps) {
           | "undeploy"
           | undefined)
       : undefined;
+
+  // Config Search deep link into a channel script. Only meaningful
+  // alongside a script name — the Scripts tab shows one buffer at a time.
+  const initialScriptLine =
+    props.mode === "edit" && props.initialTab === "scripts" && initialScript
+      ? props.initialFtLine
+      : undefined;
+
+  // Flow View badge -> full-screen FT editor. Also syncs flow selection so
+  // `onBack` returns to the connector that was just edited, since badge clicks
+  // stopPropagation and never reach the card's own onSelect.
+  const openFtFromFlow = (view: FtView) => {
+    ed.setActivePluginTab(null);
+    ed.setFlowSelection(
+      view.target === "source" ? "source" : { type: "destination", index: view.destIndex }
+    );
+    ed.setFtView(view);
+  };
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-gray-900">
@@ -318,6 +341,19 @@ export function ChannelEditorCore(props: ChannelEditorCoreProps) {
                   onImportSource={ed.handleSourceConnectorImport}
                   onExportDest={ed.handleDestinationExport}
                   onImportDest={ed.handleDestinationImport}
+                  onOpenSourceFilter={() => openFtFromFlow({ mode: "filter", target: "source" })}
+                  onOpenSourceTransformer={() =>
+                    openFtFromFlow({ mode: "transformer", target: "source" })
+                  }
+                  onOpenDestFilter={(destIndex) =>
+                    openFtFromFlow({ mode: "filter", target: "dest", destIndex })
+                  }
+                  onOpenDestTransformer={(destIndex) =>
+                    openFtFromFlow({ mode: "transformer", target: "dest", destIndex })
+                  }
+                  onOpenDestResponseTransformer={(destIndex) =>
+                    openFtFromFlow({ mode: "responseTransformer", target: "dest", destIndex })
+                  }
                 />
               </div>
               {/* Resize handle */}
@@ -413,6 +449,7 @@ export function ChannelEditorCore(props: ChannelEditorCoreProps) {
                     null
                   );
                 })()}
+                initialSelection={ed.ftDeepLink ?? undefined}
               />
             )}
 
@@ -478,6 +515,7 @@ export function ChannelEditorCore(props: ChannelEditorCoreProps) {
                   onClearSrcErrors={ed.clearSrcSaveErrors}
                   onClearDestErrors={ed.clearDestSaveErrors}
                   initialScript={initialScript}
+                  initialScriptLine={initialScriptLine}
                   activePluginTab={ed.activePluginTab}
                   mode={props.mode}
                   editChannelId={props.mode === "edit" ? props.channelId : undefined}

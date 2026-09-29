@@ -1,0 +1,18 @@
+{
+  "manifestVersion": 3,
+  "dataTypes": [
+    {
+      "name": "Corpus Collection DT",
+      "displayName": "Corpus Collection DT",
+      "propertyGroups": [
+        {
+          "group": "serialization",
+          "fields": [
+            { "key": "delimiters", "type": "stringList", "label": "Delimiters" },
+            { "key": "options", "type": "map", "label": "Options" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -3,21 +3,24 @@ import type { ValidationError } from "@/app/(app)/channels/_connectors/shared/va
 
 /**
  * Props passed to a mode-specific SettingsSection component rendered inside
- * the transmission mode dialog.
- *
- * Intentionally minimal in v1. The shape will be finalized when a custom mode
- * (e.g. Sectra's Syslog mode) provides a real SettingsSection implementation.
+ * the transmission mode dialog (below the shared SOM/EOM rows). The dialog
+ * owns the draft settings and the invalid-field highlight set; the section
+ * edits via partial patches (editing a patched field clears its highlight).
  */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface TransmissionModeSectionProps {
-  // Reserved — extend when a concrete SettingsSection implementation is needed.
+  settings: TransmissionModeSettings;
+  onChange: (patch: Partial<TransmissionModeSettings>) => void;
+  /** Field keys currently failing validation (red highlight). */
+  invalidFields: ReadonlySet<string>;
 }
 
 /**
  * The editable transmission-mode settings shared by the TCP connectors and the
  * transmission-mode settings dialog. Mirrors the union of Java
  * FrameModeProperties (start/end bytes) + MLLPModeProperties (useMLLPv2, ack/nack,
- * maxRetries) fields used by the *ModeSettingsDialog classes.
+ * maxRetries) fields used by the *ModeSettingsDialog classes. Runtime
+ * (manifest-contributed) modes keep their declared fields in `extra` — string
+ * values keyed by the field's XML element name.
  */
 export interface TransmissionModeSettings {
   transmissionMode: string;
@@ -27,6 +30,8 @@ export interface TransmissionModeSettings {
   ackBytes: string;
   nackBytes: string;
   maxRetries: string;
+  /** Runtime-mode field values (element name → text). `{}` for built-ins. */
+  extra: Record<string, string>;
 }
 
 /**
@@ -70,6 +75,17 @@ export interface TransmissionModeDefinition {
   propertiesClass: string;
   /** Optional React section rendered inside the dialog for mode-specific settings. */
   SettingsSection?: ComponentType<TransmissionModeSectionProps>;
+  /**
+   * Dialog/host "Sample Frame" label override (Java getSampleLabel()) —
+   * defaults to "Sample Frame:". MLLP carries "MLLP Sample Frame:".
+   */
+  sampleLabel?: string;
+  /**
+   * Default values for the mode's `extra` fields, keyed by element name.
+   * Runtime modes compile this from their declared fields' defaultValue, so
+   * mode-switch resets and serialization are complete and deterministic.
+   */
+  defaultExtra?: Record<string, string>;
   /** Returns the framed sample preview string for the given payload. */
   buildSampleFrame?: (payload: string) => string;
   /** Optional client-side validation; return empty array when valid. */

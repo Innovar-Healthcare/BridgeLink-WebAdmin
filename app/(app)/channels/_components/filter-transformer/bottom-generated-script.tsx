@@ -10,10 +10,9 @@ import { RHINO_LANG_ID, registerRhinoLanguage } from "@/lib/monaco-rhino";
 interface Props {
   script: string;
   elementLabel: string;
-  isDark: boolean;
 }
 
-export function BottomGeneratedScript({ script, elementLabel, isDark }: Props) {
+export function BottomGeneratedScript({ script, elementLabel }: Props) {
   const [copied, setCopied] = useState(false);
   const { viewDensity } = useCompactMode();
   const barPy =
@@ -58,7 +57,6 @@ export function BottomGeneratedScript({ script, elementLabel, isDark }: Props) {
         <MonacoEditor
           height="100%"
           language={RHINO_LANG_ID}
-          theme={isDark ? "mirth-js-dark" : "mirth-js"}
           value={script || "// No script generated"}
           beforeMount={handleBeforeMount}
           options={{

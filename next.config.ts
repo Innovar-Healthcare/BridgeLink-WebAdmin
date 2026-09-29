@@ -81,6 +81,33 @@ const nextConfig: NextConfig = {
     "/api/auth/whoami": ["./node_modules/undici/**/*"],
     "/api/ssl/import-trusted-pem": ["./node_modules/undici/**/*"],
   },
+  // Hard guardrail against shipping raw source to customers. Next's file tracer
+  // over-includes files it cannot statically resolve; a route that transitively
+  // performs a filesystem read with a non-literal path (the dev-only webadmin
+  // fixture module did exactly this via BL_WEBADMIN_PLUGINS_FIXTURE_DIR) makes
+  // nft fall back to tracing the ENTIRE project root, so `next build` copied raw
+  // .ts/.tsx — including the commercial plugins/ overlay — into .next/standalone
+  // and the packaging scripts shipped it. The standalone only ever executes
+  // COMPILED output under .next/; raw application source and Markdown are never
+  // runtime-loaded, so excluding them here can never break the artifact but
+  // guarantees no source leaks regardless of what the tracer decides to include.
+  // (server.ts is compiled to server.js separately by scripts/package-*.sh.)
+  outputFileTracingExcludes: {
+    "*": [
+      "app/**",
+      "lib/**",
+      "components/**",
+      "hooks/**",
+      "plugins/**",
+      "e2e/**",
+      "__tests__/**",
+      "scripts/**",
+      "docs/**",
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.md",
+    ],
+  },
   turbopack: {
     root: path.resolve(__dirname),
   },

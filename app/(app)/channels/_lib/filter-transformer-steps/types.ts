@@ -192,6 +192,17 @@ export interface TransformerStepDefinition<
    */
   validate(step: TStep): string | null;
 
+  /**
+   * The JavaScript source this step contributes to server-side (Rhino) syntax validation,
+   * or null/undefined when the step carries no user script to compile. Only the
+   * JavaScript step implements this — it returns its raw script, matching what the client-side
+   * acorn path validates today. Steps whose generated script is built from structured fields
+   * (Mapper, Message Builder, …) keep validating those fields via `validate` and are not
+   * routed through the server here. When present, `validate` is treated as this step's parse
+   * check and skipped in the split (structural pass), so the two don't double-report.
+   */
+  getScript?(step: TStep): string | null;
+
   /** React component rendered in the detail pane when this step is selected. */
   EditorPanel: ComponentType<TransformerStepEditorProps<TStep>>;
 

@@ -30,7 +30,6 @@ export interface Table {
 
 const SELECT_LIMITS: Record<string, string> = {
   "oracle.jdbc.driver.OracleDriver": "SELECT * FROM ? WHERE ROWNUM < 2",
-  "net.sourceforge.jtds.jdbc.Driver": "SELECT TOP 1 * FROM ?",
   "com.microsoft.sqlserver.jdbc.SQLServerDriver": "SELECT TOP 1 * FROM ?",
 };
 

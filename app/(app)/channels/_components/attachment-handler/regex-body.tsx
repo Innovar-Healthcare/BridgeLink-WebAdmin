@@ -5,7 +5,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useCompactMode, densityHeight } from "@/lib/hooks/use-compact-mode";
 import type {
   AttachmentHandlerState,
-  AttachmentCommitResult,
+  AttachmentCommitFn,
   ReplacementEntry,
 } from "../../_lib/channel-xml";
 
@@ -88,7 +88,7 @@ function EditableKvTable({
 interface RegexBodyProps {
   local: AttachmentHandlerState;
   setLocal: (s: AttachmentHandlerState) => void;
-  commitRef: MutableRefObject<() => AttachmentCommitResult>;
+  commitRef: MutableRefObject<AttachmentCommitFn>;
 }
 
 export function RegexBody({ local, setLocal, commitRef }: RegexBodyProps) {
@@ -98,9 +98,11 @@ export function RegexBody({ local, setLocal, commitRef }: RegexBodyProps) {
     bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
     focus:outline-none focus:border-blue-500 dark:focus:border-blue-400 focus:ring-1 focus:ring-blue-500/30`;
 
-  // Keep commitRef up-to-date with latest local state so the shell can call it at save time
+  // Keep commitRef up-to-date with latest local state so the shell can call it at save time.
+  // Async to satisfy the shared commit contract (the JS body validates server-side); regex has
+  // nothing to validate, so it resolves immediately.
   useEffect(() => {
-    commitRef.current = () => local;
+    commitRef.current = async () => local;
   });
 
   // ── Pattern helpers ──────────────────────────────────────────────────────

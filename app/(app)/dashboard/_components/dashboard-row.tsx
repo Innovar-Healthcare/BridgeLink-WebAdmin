@@ -1,10 +1,11 @@
 "use client";
 
 import { memo, type MouseEvent } from "react";
-import { ChevronDown, ChevronRight, Cable, Copy } from "lucide-react";
+import { ChevronDown, ChevronRight, Cable, Copy, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { StatusBadge } from "@/components/status-badge";
+import { HoverTooltip } from "@/components/hover-tooltip";
 import { TagChip } from "@/components/tag-chip";
 import type { TagDisplayMode } from "@/lib/hooks/use-tag-display-mode";
 import { type ViewDensity, tightenDensity } from "@/lib/hooks/use-compact-mode";
@@ -13,7 +14,11 @@ import type { StatsMode } from "@/lib/hooks/use-dashboard-stats";
 import type { ColDef } from "@/lib/hooks/use-column-config";
 import type { TrendEntry } from "../_lib/trend-utils";
 import { allDescendantsStarted } from "../_lib/group-status";
-import type { ConnectorStateMap } from "@/lib/api/api-dashboard";
+import { formatDurationSince, overdueTooltip } from "../_lib/lifecycle-overdue";
+import {
+  serverSupportsStuckChannelDiagnostics,
+  type ConnectorStateMap,
+} from "@/lib/api/api-dashboard";
 import { TableRow, TableCell } from "@/components/data-table";
 import { isRecentlyDeployed, RECENT_DEPLOY_CELL_CLASS } from "@/lib/recent-deploy";
 import {
@@ -56,6 +61,16 @@ export function stat(s: ChannelStatistics | undefined, key: string): number {
   const upper = key.toUpperCase() as keyof ChannelStatistics;
   const lower = key.toLowerCase() as keyof ChannelStatistics;
   return (s[upper] ?? s[lower] ?? 0) as number;
+}
+
+// ─── Overdue tooltip ──────────────────────────────────────────────────────────
+
+/**
+ * Rendered by Radix only while the tooltip is open, so the elapsed time is computed at hover time
+ * rather than frozen at the row's last render (a stuck row re-renders rarely by design).
+ */
+function OverdueTooltipText({ state, stateSince }: { state?: string; stateSince?: string }) {
+  return <>{overdueTooltip(state, formatDurationSince(stateSince))}</>;
 }
 
 // ─── Stat cell ────────────────────────────────────────────────────────────────
@@ -115,6 +130,8 @@ export interface RowProps {
   onGroupAction?: (channelIds: string[], action: ChannelAction) => void;
   onViewMessages?: (channelId: string, metaDataId?: number) => void;
   onSendMessage?: (channelId: string, channelName: string) => void;
+  /** Open the thread diagnostics dialog for a deployed channel. */
+  onViewThreads?: (channelId: string, channelName: string) => void;
   onClearStats?: (channelId: string, metaDataId: number | null, channelName: string) => void;
   onRemoveAllMessages?: (
     channels: { channelId: string; channelName: string; channelState: string }[]
@@ -137,6 +154,15 @@ export interface RowProps {
    * sufficient. Undefined for top-level channel rows (they don't need it).
    */
   parentChannelState?: string;
+  /**
+   * True when any channel in the *current selection* (not just this row) is in a
+   * haltable non-SYNCING state. Undeploy is an all-or-nothing task in Java — a single
+   * transitioning channel disables it for the whole selection, not just itself
+   * (`DashboardPanel.java:464-478,530-535`) — so the context-menu item must consult
+   * this instead of the row's own state whenever the right-click targets a
+   * multi-selection..
+   */
+  selectionHasHaltableNonSyncing?: boolean;
 }
 
 function DashboardRowImpl({
@@ -160,6 +186,7 @@ function DashboardRowImpl({
   onGroupAction,
   onViewMessages,
   onSendMessage,
+  onViewThreads,
   onClearStats,
   onRemoveAllMessages,
   onGroupClearStats,
@@ -170,6 +197,7 @@ function DashboardRowImpl({
   tagDisplayMode,
   globalDensity,
   parentChannelState,
+  selectionHasHaltableNonSyncing,
 }: RowProps) {
   const effectiveStats = statsMode === "lifetime" ? status.lifetimeStatistics : status.statistics;
   const key = rowKey(status);
@@ -197,18 +225,43 @@ function DashboardRowImpl({
           status.state === "STARTED" && !allDescendantsStarted(status.childStatuses)
             ? "STARTING"
             : undefined;
+        // a channel STOPPING or STARTING longer than the stop grace period gets a
+        // warning triangle next to its badge. Clicking it opens the thread diagnostics.
+        const overdue = isChannel && status.lifecycleOverdue === true;
         return (
           <TableCell key={col.key} align={effectiveDensity !== "comfortable" ? "center" : "left"}>
-            {status.state ? (
-              <StatusBadge
-                status={status.state}
-                colorStatus={colorStatus}
-                variant="channel"
-                density={effectiveDensity}
-              />
-            ) : (
-              <span className="text-xs text-gray-400">—</span>
-            )}
+            <span className="inline-flex items-center gap-1">
+              {status.state ? (
+                <StatusBadge
+                  status={status.state}
+                  colorStatus={colorStatus}
+                  variant="channel"
+                  density={effectiveDensity}
+                />
+              ) : (
+                <span className="text-xs text-gray-400">—</span>
+              )}
+              {overdue && (
+                <HoverTooltip
+                  content={
+                    <OverdueTooltipText state={status.state} stateSince={status.stateSince} />
+                  }
+                >
+                  <button
+                    type="button"
+                    className="inline-flex shrink-0 text-amber-600 hover:text-amber-700 dark:text-amber-400"
+                    aria-label="Channel stuck past the stop grace period; open thread diagnostics"
+                    data-testid="lifecycle-overdue"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onViewThreads?.(status.channelId, status.name);
+                    }}
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                  </button>
+                </HoverTooltip>
+              )}
+            </span>
           </TableCell>
         );
       }
@@ -587,8 +640,19 @@ function DashboardRowImpl({
   const canInteract = !MID_DEPLOY_STATES.includes(state);
   // Remove All Messages hidden for any haltable state (Java :528).
   const canRemoveAll = !isHaltableState;
+  // True when this row is part of a multi-selection — computed here (rather than below,
+  // with the other selection-aware flags) because canUndeploy needs it immediately.
+  const rightClickTargetsSelection = !!(
+    selectedIds &&
+    selectedIds.has(status.channelId) &&
+    selectedIds.size > 1
+  );
   // Undeploy hidden for haltable non-SYNCING states (Java :532-535); SYNCING stays allowed.
-  const canUndeploy = !isHaltableState || state === "SYNCING";
+  // For a multi-selection right-click, the gate is whole-selection, not per-row — a single
+  // transitioning channel elsewhere in the selection disables Undeploy here too.
+  const canUndeploy = rightClickTargetsSelection
+    ? !selectionHasHaltableNonSyncing
+    : !isHaltableState || state === "SYNCING";
 
   // Connector Start/Stop tasks are only offered when the parent channel is STARTED
   // or PAUSED — mirrors Java DashboardPanel.java:547-550 (tasks 10-11 hidden
@@ -602,15 +666,6 @@ function DashboardRowImpl({
       onChannelAction?.(status.channelId, action);
     }
   }
-
-  // True when this row is part of a multi-selection — context-menu actions should
-  // then apply to every selected channel, not just the right-clicked one (matches
-  // the toolbar and the Java client). Mirrors the triggerAction gate above.
-  const rightClickTargetsSelection = !!(
-    selectedIds &&
-    selectedIds.has(status.channelId) &&
-    selectedIds.size > 1
-  );
 
   const subRowTint =
     !isChannel && !isSelected && effectiveDensity !== "comfortable"
@@ -648,6 +703,14 @@ function DashboardRowImpl({
               >
                 Send Message
               </ContextMenuItem>
+              {/* what a channel stuck in Stopping/Starting is stuck on. Offered in every
+                  state (a healthy channel just shows its queue and receiver threads); a Web UI
+                  addition with no Java-client counterpart, paired with Core's _threads endpoint. */}
+              {serverSupportsStuckChannelDiagnostics() && (
+                <ContextMenuItem onSelect={() => onViewThreads?.(status.channelId, status.name)}>
+                  Thread Diagnostics
+                </ContextMenuItem>
+              )}
               <ContextMenuSeparator />
               <ContextMenuItem onSelect={() => triggerAction("start")} disabled={!canStart}>
                 Start
@@ -814,6 +877,7 @@ function DashboardRowImpl({
             onGroupAction={onGroupAction}
             onViewMessages={onViewMessages}
             onSendMessage={onSendMessage}
+            onViewThreads={onViewThreads}
             onClearStats={onClearStats}
             onRemoveAllMessages={onRemoveAllMessages}
             onStopConnector={onStopConnector}

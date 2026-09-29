@@ -17,11 +17,13 @@
  *  - Save: validates then PUT /server/resources with full list
  *    - Confirmation dialog before saving (warns about library reload impact, 1000 file limit)
  *  - Validation: resource name must be unique across all rows
- *  - "Invalid Resource" state: if server returns a resource with InvalidResourceProperties, show
- *    an error message in the detail panel instead of editable fields.
+ *  - "Invalid Resource" state: a resource the server returns as InvalidResourceProperties (an orphan
+ *    whose plugin/subclass no longer resolves) is rendered read-only — a notice + the wrapped
+ *    exception instead of editable fields — and round-trips verbatim on save via its captured raw
+ *    entry (`_raw.propertiesXml`), so no full-set PUT fails and no data is lost.
  */
 
-import { startTransition, useCallback, useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import { Folder, FolderOpen } from "lucide-react";
 import { HoverTooltip } from "@/components/hover-tooltip";
 import { toast } from "sonner";
@@ -41,7 +43,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { FormCheckbox } from "@/components/ui/form-checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useCompactMode } from "@/lib/hooks/use-compact-mode";
+import { useCompactMode, type ViewDensity } from "@/lib/hooks/use-compact-mode";
 import { DataTable } from "@/components/data-table";
 import { useColumnConfig, type ColDef } from "@/lib/hooks/use-column-config";
 import { useSortable } from "@/lib/hooks/use-sortable";
@@ -69,6 +71,72 @@ const RESOURCE_COLS: ColDef<ResourceCol>[] = [
 
 interface ResourceRow extends ResourceProperties {
   _index: number;
+}
+
+/**
+ * The Name cell's edit surface. Mirrors SettingsPanelResources' NameEditor: the value is only
+ * validated and committed when the cell edit ends (blur/Enter), not on every keystroke — Java
+ * reverts to the original name there if the new value is a duplicate or unchanged
+ * (`NameEditor.valueChanged`), and only marks the panel dirty on that same commit L25).
+ */
+function ResourceNameCell({
+  value,
+  otherNames,
+  density,
+  onCommit,
+}: {
+  value: string;
+  otherNames: string[];
+  density: ViewDensity;
+  onCommit: (next: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  // Re-sync the draft when the committed value changes externally (e.g. a refresh brought back
+  // a server-side rename) without the effect-then-render round trip a useEffect would add —
+  // adjusting state during render per https://react.dev/learn/you-might-not-need-an-effect.
+  const [syncedValue, setSyncedValue] = useState(value);
+  if (syncedValue !== value) {
+    setSyncedValue(value);
+    setDraft(value);
+  }
+
+  // Escape reverts and skips the pending blur's commit — a plain `setDraft(value)` wouldn't be
+  // visible to that blur's `commit()` closure yet (state updates land on the next render), so
+  // the flag lets the blur handler recognize the cancel and bail out without validating.
+  const cancelingRef = useRef(false);
+
+  function commit() {
+    if (cancelingRef.current) {
+      cancelingRef.current = false;
+      return;
+    }
+    if (draft === value) return;
+    if (otherNames.includes(draft)) {
+      toast.error(`Duplicate resource name: "${draft}".`);
+      setDraft(value);
+      return;
+    }
+    onCommit(draft);
+  }
+
+  return (
+    <Input
+      density={density}
+      value={draft}
+      onClick={(e) => e.stopPropagation()}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur();
+        } else if (e.key === "Escape") {
+          cancelingRef.current = true;
+          setDraft(value);
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
 }
 
 type LibraryCol = "library";
@@ -113,6 +181,36 @@ function uniqueName(existing: ResourceProperties[]): string {
   return `Resource ${num}`;
 }
 
+/**
+ * Best-effort exception message for an InvalidResourceProperties row. The server serializes the
+ * wrapped Throwable (`cause`) into the raw entry; XStream/Staxon shapes it as either a class-keyed
+ * object or a plain object with `detailMessage`/`message`. Java shows the full stack trace
+ * (SettingsPanelResources.java:551); we surface whatever readable message is present, or null.
+ */
+function invalidResourceCause(raw: Record<string, unknown> | undefined): string | null {
+  const cause = raw?.cause;
+  if (cause == null) return null;
+  if (typeof cause === "string") return cause;
+  if (typeof cause !== "object") return String(cause);
+
+  const pickMessage = (o: Record<string, unknown>): string | null => {
+    const msg = o.detailMessage ?? o.message;
+    return typeof msg === "string" && msg.trim() ? msg : null;
+  };
+
+  const obj = cause as Record<string, unknown>;
+  const direct = pickMessage(obj);
+  if (direct) return direct;
+  // Class-keyed shape: {"java.lang.NoClassDefFoundError": {detailMessage: "..."}}
+  for (const val of Object.values(obj)) {
+    if (val && typeof val === "object") {
+      const nested = pickMessage(val as Record<string, unknown>);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
 export interface ResourcesTabActions {
   save: () => void;
   refresh: () => void;
@@ -144,7 +242,6 @@ export function ResourcesTab({
   const { viewDensity } = useCompactMode();
   const [selectedIdx, setSelectedIdx] = useState<number>(-1);
   const resourceColConfig = useColumnConfig(RESOURCE_COLS, "bl-settings-resources-cols-v1");
-  const resourceSortState = useSortable<ResourceCol>("name", "asc");
   const libraryColConfig = useColumnConfig(LIBRARY_COLS, "bl-settings-resource-libraries-cols-v1");
   const librarySortState = useSortable<LibraryCol>("library", "asc");
   const [loading, setLoading] = useState(false);
@@ -166,6 +263,14 @@ export function ResourcesTab({
   // Remove is gated on identity — the default resource is never removable — not on row index.
   const canRemove = selectedIdx >= 0 && !isDefault;
 
+  // Read inside `load` (a stable, deps-less callback) without adding selectedIdx to its deps —
+  // mirrors SettingsPanelResources.updateResourcesTable, which restores selection by row index
+  // across refresh/save/reload rather than defaulting back to row 0 L24).
+  const selectedIdxRef = useRef(selectedIdx);
+  useEffect(() => {
+    selectedIdxRef.current = selectedIdx;
+  });
+
   const markDirty = useCallback(() => {
     setDirty(true);
     onDirty?.(true);
@@ -184,7 +289,10 @@ export function ResourcesTab({
         list.unshift(def);
       }
       setResourcesList(list);
-      setSelectedIdx(list.length > 0 ? 0 : -1);
+      const previousIdx = selectedIdxRef.current;
+      setSelectedIdx(
+        previousIdx > -1 && previousIdx < list.length ? previousIdx : list.length > 0 ? 0 : -1
+      );
       setDirty(false);
       onDirty?.(false);
       setLibraryRefreshKey((k) => k + 1);
@@ -338,7 +446,8 @@ export function ResourcesTab({
         saving,
         loading,
         canRemove,
-        canReload: selectedIdx >= 0,
+        // Invalid (orphaned) resources have no loadable directory — reload is meaningless there.
+        canReload: selectedIdx >= 0 && !selectedResource?.invalid,
         reloading,
       };
     }
@@ -356,28 +465,15 @@ export function ResourcesTab({
 
       {/* Resource list table ~20% */}
       <SettingsSection title="Resources" icon={Folder}>
+        {/* "resizable", not "sortable": Java's resourceTable has setSortable(false) — no
+            column-header sort at all, insertion order only (default pinned first by `load`).
+            A user-triggered sort here would re-order rows on every keystroke while renaming,
+            dropping focus mid-edit finding 21). */}
         <DataTable<ResourceRow, ResourceCol>
-          variant="sortable"
+          variant="resizable"
           cols={RESOURCE_COLS}
-          rows={resourceSortState.sorted(
-            resources.map((r, i) => ({ ...r, _index: i })),
-            (r) => {
-              switch (resourceSortState.sort.key) {
-                case "name":
-                  return r.name;
-                case "type":
-                  return r.type;
-                case "globalScripts":
-                  return r.includeWithGlobalScripts ? 1 : 0;
-                case "loadParentFirst":
-                  return r.loadParentFirst ? 1 : 0;
-                default:
-                  return undefined;
-              }
-            }
-          )}
+          rows={resources.map((r, i) => ({ ...r, _index: i }))}
           colConfig={resourceColConfig}
-          sortState={resourceSortState}
           rowKey={(r) => r.id}
           selectedRowId={selectedIdx >= 0 ? resources[selectedIdx]?.id : null}
           onRowClick={(r) => setSelectedIdx(r._index)}
@@ -390,15 +486,22 @@ export function ResourcesTab({
             const selected = idx === selectedIdx;
             const isDefaultRow = row.id === DEFAULT_RESOURCE_ID;
             if (col === "name") {
-              if (isDefaultRow || !selected) {
+              // Invalid (orphaned) resources are rendered read-only here as an MVP simplification.
+              // Java actually allows renaming them — SettingsPanelResources.isCellEditable permits the
+              // name on any row > 0, and InvalidResourceProperties.setName patches the <name> element
+              // inside the preserved propertiesXml so the rename survives the verbatim marshal.
+              // Mirroring that means client-side surgery on _raw.propertiesXml; deferred —
+              // remove-and-recreate covers the rare need to relabel an orphan.
+              if (isDefaultRow || row.invalid || !selected) {
                 return <span>{row.name}</span>;
               }
               return (
-                <Input
-                  density={viewDensity}
+                <ResourceNameCell
+                  key={row.id}
                   value={row.name}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => updateResource(idx, { name: e.target.value })}
+                  density={viewDensity}
+                  otherNames={resources.filter((r) => r.id !== row.id).map((r) => r.name)}
+                  onCommit={(next) => updateResource(idx, { name: next })}
                 />
               );
             }
@@ -406,33 +509,47 @@ export function ResourcesTab({
             if (col === "type") return row.type;
             if (col === "globalScripts") {
               return (
-                <HoverTooltip content="If checked, libraries associated with the corresponding resource will be included in global script contexts.">
+                <HoverTooltip
+                  content={
+                    row.invalid
+                      ? "This resource is invalid and cannot be edited."
+                      : "If checked, libraries associated with the corresponding resource will be included in global script contexts."
+                  }
+                >
                   <input
                     type="checkbox"
                     checked={!!row.includeWithGlobalScripts}
+                    disabled={row.invalid}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) =>
                       updateResource(idx, {
                         includeWithGlobalScripts: e.target.checked,
                       })
                     }
-                    className="accent-blue-600 w-4 h-4"
+                    className="accent-blue-600 w-4 h-4 disabled:opacity-50"
                   />
                 </HoverTooltip>
               );
             }
             return (
-              <HoverTooltip content="If checked, classes already included in the overall server classpath will not be able to be overwritten. Classes will attempt to be loaded from the parent ClassLoader first. Also, if this resource is included on a channel with other resources that have this option disabled, you will still not be able to overwrite classes in the parent classpath.">
+              <HoverTooltip
+                content={
+                  row.invalid
+                    ? "This resource is invalid and cannot be edited."
+                    : "If checked, classes already included in the overall server classpath will not be able to be overwritten. Classes will attempt to be loaded from the parent ClassLoader first. Also, if this resource is included on a channel with other resources that have this option disabled, you will still not be able to overwrite classes in the parent classpath."
+                }
+              >
                 <input
                   type="checkbox"
                   checked={!!row.loadParentFirst}
+                  disabled={row.invalid}
                   onClick={(e) => e.stopPropagation()}
                   onChange={(e) =>
                     updateResource(idx, {
                       loadParentFirst: e.target.checked,
                     })
                   }
-                  className="accent-blue-600 w-4 h-4"
+                  className="accent-blue-600 w-4 h-4 disabled:opacity-50"
                 />
               </HoverTooltip>
             );
@@ -441,7 +558,22 @@ export function ResourcesTab({
       </SettingsSection>
 
       {/* Resource detail panel ~80% */}
-      {selectedResource ? (
+      {selectedResource?.invalid ? (
+        // Orphaned resource (InvalidResourceProperties): its plugin/subclass could not be resolved
+        // server-side. Mirrors SettingsPanelResources.java:540-555 — read-only notice + the wrapped
+        // exception, no editable fields. The original definition round-trips verbatim on save.
+        <SettingsSection title="Invalid Resource" icon={FolderOpen} className="flex-1">
+          <div className="text-sm text-red-600 dark:text-red-400">
+            The currently selected resource is invalid. Check to make sure all resource extensions
+            are correctly loaded.
+          </div>
+          {invalidResourceCause(selectedResource._raw) && (
+            <pre className="mt-3 flex-1 min-h-0 overflow-auto rounded bg-muted px-3 py-2 text-xs font-mono whitespace-pre-wrap text-muted-foreground">
+              {invalidResourceCause(selectedResource._raw)}
+            </pre>
+          )}
+        </SettingsSection>
+      ) : selectedResource ? (
         <SettingsSection title="Directory Settings" icon={Folder} className="flex-1">
           {/* Directory path */}
           <div className="flex items-center gap-3">
@@ -469,15 +601,11 @@ export function ResourcesTab({
             </label>
             <Textarea
               density={viewDensity}
-              enableTabKey={!isDefault}
+              enableTabKey
               value={selectedResource.description ?? ""}
               onChange={(e) => updateResource(selectedIdx, { description: e.target.value })}
               rows={4}
-              readOnly={isDefault}
-              className={[
-                "flex-1 resize-none",
-                isDefault ? "bg-muted text-muted-foreground" : "",
-              ].join(" ")}
+              className="flex-1 resize-none"
             />
           </div>
 

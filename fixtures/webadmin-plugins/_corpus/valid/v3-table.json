@@ -1,0 +1,34 @@
+{
+  "manifestVersion": 3,
+  "connectorPanels": [
+    {
+      "mode": "destination",
+      "transportName": "Corpus Table Sender",
+      "sections": [
+        {
+          "title": "Attachments",
+          "presentation": "dialog",
+          "fields": [
+            {
+              "key": "attachments",
+              "type": "table",
+              "label": "Attachments",
+              "rowElement": "com.mirth.connect.connectors.smtp.Attachment",
+              "columns": [
+                { "element": "name", "label": "Name" },
+                { "element": "content", "label": "Content" },
+                { "element": "mimeType", "label": "MIME Type", "placeholder": "text/plain" }
+              ],
+              "addLabel": "Add Attachment",
+              "variableToggle": {
+                "variableKey": "attachmentsVariable",
+                "useVariableKey": "isUseAttachmentsVariable",
+                "variableLabel": "Use List"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { getAvailableCharsetEncodings } from "@/lib/api-client";
+// Imported from the specific module, not the `api-client` barrel: `lib/logout` reaches this
+// hook, and the barrel re-exports every api module — including ones that register a cache
+// teardown at module scope, which made that registration run inside `lib/logout`'s own TDZ
+//.
+import { getAvailableCharsetEncodings } from "@/lib/api/api-settings";
 
 // Module-level singleton — the server charset list is fetched once per app session
 // (it never changes for a running server) and shared across every connector's

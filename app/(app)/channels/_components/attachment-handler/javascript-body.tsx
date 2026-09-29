@@ -1,18 +1,19 @@
 "use client";
 
-import { type MutableRefObject, useEffect, useMemo, useRef } from "react";
+import { type MutableRefObject, useCallback, useEffect, useMemo, useRef } from "react";
 import { type BeforeMount, type OnMount } from "@monaco-editor/react";
 import { MonacoEditor } from "@/components/monaco-editor";
 import { CheckCircle, XCircle } from "lucide-react";
 import { getRhinoEditorOptions } from "@/lib/monaco-defaults";
 import { useMonacoOverflowHost } from "@/lib/hooks/use-monaco-overflow-host";
-import { useTheme } from "@/lib/hooks/use-theme";
 import { useHorizontalResize } from "@/lib/hooks/use-horizontal-resize";
-import { tryParseJs } from "@/lib/js-validation";
-import { jsAttachmentSaveWarning } from "../../_lib/attachment-validation";
-import { CATEGORIES } from "@/lib/reference-data";
+import {
+  jsAttachmentSaveWarning,
+  validateJsAttachmentScript,
+} from "../../_lib/attachment-validation";
+import { useScriptReferenceCatalog } from "@/lib/script-references-catalog";
 import { ScriptReferencePanel } from "../scripts-tab";
-import type { AttachmentHandlerState, AttachmentCommitResult } from "../../_lib/channel-xml";
+import type { AttachmentHandlerState, AttachmentCommitFn } from "../../_lib/channel-xml";
 import { useState } from "react";
 import {
   RHINO_LANG_ID,
@@ -44,16 +45,13 @@ const handleBeforeMount: BeforeMount = (monaco) => {
 //   - scriptExclude items are connector/filter-transformer-only and not visible in
 //     attachment context per Java's context-set logic.
 const ATTACHMENT_EXCLUDED = new Set(["variables", "response", "postprocessor"]);
-const ATTACHMENT_CATEGORIES = CATEGORIES.filter((cat) => !ATTACHMENT_EXCLUDED.has(cat.id))
-  .map((cat) => ({ ...cat, items: cat.items.filter((item) => !item.scriptExclude) }))
-  .filter((cat) => cat.items.length > 0);
 
 // ─── JavaScriptBody ──────────────────────────────────────────────────────────
 
 interface JavaScriptBodyProps {
   local: AttachmentHandlerState;
   setLocal: (s: AttachmentHandlerState) => void;
-  commitRef: MutableRefObject<() => AttachmentCommitResult>;
+  commitRef: MutableRefObject<AttachmentCommitFn>;
   setFooterLeft: (node: React.ReactNode) => void;
   channelId?: string;
 }
@@ -65,11 +63,11 @@ export function JavaScriptBody({
   setFooterLeft,
   channelId,
 }: JavaScriptBodyProps) {
-  const { isDark } = useTheme();
   const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
   const [validateResult, setValidateResult] = useState<{ ok: boolean; message: string } | null>(
     null
   );
+  const [validating, setValidating] = useState(false);
 
   // AI seam — orb + Explain/Generate/Fix actions on this always-JS attachment script.
   // connectorType names the script surface so the AI grounds on "attachment
@@ -87,7 +85,7 @@ export function JavaScriptBody({
     [channelId]
   );
 
-  //: this editor lives inside a Radix *modal* dialog, so its widgets must
+  // this editor lives inside a Radix *modal* dialog, so its widgets must
   // be hosted inside the dialog subtree (see useMonacoOverflowHost). Paired
   // requirement: the dialog must not sit under a CSS transform/translate, or the
   // position:fixed suggest/hover popup anchors to the dialog box and renders offset
@@ -114,33 +112,45 @@ export function JavaScriptBody({
   // its "Validate" button is informational only, so an E4X/Rhino construct acorn cannot
   // parse must not make a valid script unsaveable #45).
   useEffect(() => {
-    commitRef.current = () => {
-      const warning = jsAttachmentSaveWarning(local.javaScriptScript);
+    commitRef.current = async () => {
+      const warning = await jsAttachmentSaveWarning(local.javaScriptScript);
       return warning ? { warning, value: local } : local;
     };
   });
 
-  // Validate helper. tryParseJs parses E4X XML literals and neutralizes E4X operators, so real
-  // errors surface even in E4X scripts; forms it can't represent are deferred (returns null).
-  function validateScript() {
-    const err = tryParseJs(local.javaScriptScript);
-    setValidateResult(
-      err ? { ok: false, message: err } : { ok: true, message: "No syntax errors detected." }
-    );
-  }
+  // Validate helper — server-side (real Rhino) when the Core supports it, else the acorn
+  // fallback, which parses E4X XML literals and neutralizes E4X operators so real errors
+  // surface even in E4X scripts (deferring forms it can't represent)..
+  // Memoized on the current script so the footer effect below picks up a fresh closure
+  // on every edit — otherwise the button captures whatever script was current the last
+  // time validateResult/validating changed, one edit behind.
+  const validateScript = useCallback(async () => {
+    setValidating(true);
+    try {
+      const err = await validateJsAttachmentScript(local.javaScriptScript);
+      setValidateResult(
+        err ? { ok: false, message: err } : { ok: true, message: "No syntax errors detected." }
+      );
+    } catch (e) {
+      setValidateResult({ ok: false, message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setValidating(false);
+    }
+  }, [local.javaScriptScript]);
 
   // Render Validate button into parent footer's left slot
   useEffect(() => {
     setFooterLeft(
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <button
-          onClick={validateScript}
+          onClick={() => void validateScript()}
+          disabled={validating}
           className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border
             border-border text-gray-700 dark:text-gray-300
             hover:bg-gray-50 dark:hover:bg-gray-700 hover:border-border
-            transition-colors font-medium"
+            transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          Validate JS
+          {validating ? "Validating…" : "Validate JS"}
         </button>
         {validateResult && (
           <span
@@ -157,8 +167,7 @@ export function JavaScriptBody({
         )}
       </div>
     );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [validateResult]);
+  }, [validateResult, validating, validateScript, setFooterLeft]);
 
   // Drag-drop from reference panel into Monaco — wired in onMount (not module scope)
   // so the handler is reattached each time the dialog opens/closes.
@@ -215,8 +224,28 @@ export function JavaScriptBody({
     );
   };
 
-  // Memoize categories (stable reference — no per-render deps)
-  const attachmentCategories = useMemo(() => ATTACHMENT_CATEGORIES, []);
+  // Reference catalog filtered to the attachment (CHANNEL_ATTACHMENT) context — server-
+  // derived when the connected Core supports it, frozen client catalog otherwise.
+  // Per-item: honor the server-provided contextSet when present (server items always carry
+  // it); fall back to the client scriptExclude flag for the frozen catalog. CHANNEL_ATTACHMENT
+  // is not a lifecycle (SCRIPT_ONLY) context, so isRefItemVisibleInContext is NOT equivalent
+  // here — the frozen catalog deliberately hides all scriptExclude items in this editor.
+  const catalog = useScriptReferenceCatalog();
+  const attachmentCategories = useMemo(
+    () =>
+      catalog
+        .filter((cat) => !ATTACHMENT_EXCLUDED.has(cat.id))
+        .map((cat) => ({
+          ...cat,
+          items: cat.items.filter((item) =>
+            item.contexts?.length
+              ? item.contexts.includes("CHANNEL_ATTACHMENT")
+              : !item.scriptExclude
+          ),
+        }))
+        .filter((cat) => cat.items.length > 0),
+    [catalog]
+  );
 
   return (
     <div className="flex flex-1 overflow-hidden">
@@ -229,7 +258,6 @@ export function JavaScriptBody({
             setLocal({ ...local, javaScriptScript: v ?? "" });
             setValidateResult(null);
           }}
-          theme={isDark ? "mirth-js-dark" : "mirth-js"}
           height="100%"
           beforeMount={handleBeforeMount}
           onMount={handleMount}

@@ -11,13 +11,15 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Loader2, AlertCircle, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { importMessagesFromPath, importMessage } from "@/lib/api-client";
 import { FormCheckbox } from "@/components/ui/form-checkbox";
 import { HoverTooltip } from "@/components/hover-tooltip";
 import { useCompactMode } from "@/lib/hooks/use-compact-mode";
+import { checkFileSize, checkEachFileSize, createUnzipGuard } from "@/lib/file-size-guard";
+import { ensureZip64Eocd } from "@/lib/zip64";
+import { DialogFieldRow as Row } from "@/components/messages/dialog-field-row";
 
 /** Field hover tooltips ported from Java MessageImportDialog. */
 const TIP = {
@@ -60,6 +62,8 @@ export function ImportMessagesDialog({
   onImported,
 }: ImportMessagesDialogProps) {
   const { viewDensity } = useCompactMode();
+  const rowGap =
+    viewDensity === "comfortable" ? "gap-4" : viewDensity === "compact" ? "gap-2" : "gap-3";
   const [importFrom, setImportFrom] = useState<"server" | "local">("server");
   const [filePath, setFilePath] = useState("");
   const [includeSubfolders, setIncludeSubfolders] = useState(true);
@@ -92,6 +96,21 @@ export function ImportMessagesDialog({
     const files = e.target.files;
     if (!files || files.length === 0) return;
     const fileList = Array.from(files);
+
+    // Reject oversize input at selection time rather than on Import, so the operator finds
+    // out the moment they pick the file. Each file is checked on its own, with no
+    // aggregate cap: handleImport reads the selection strictly one file at a time, so peak
+    // memory is bounded by the largest single file and a combined cap would only reject bulk
+    // restores the code handles fine.
+    const tooLarge = checkEachFileSize(fileList);
+    if (tooLarge) {
+      setSelectedFiles([]);
+      setFilePath("");
+      setError(tooLarge);
+      if (e.target) e.target.value = "";
+      return;
+    }
+
     setSelectedFiles(fileList);
     // Show file names in the path field
     if (fileList.length === 1) {
@@ -158,8 +177,15 @@ export function ImportMessagesDialog({
    * `.DS_Store` files that macOS's native "Compress" adds. An extension filter alone would not catch
    * these (the AppleDouble files are named `._foo.xml`, so they still end in `.xml`); the content
    * scan is both more faithful to Java and more robust.
+   *
+   * Archives are additionally bounded by `createUnzipGuard` so a decompression bomb cannot exhaust
+   * the tab's memory. The guard runs as fflate's entry filter, i.e. before anything is
+   * inflated; a tripped guard fails the whole archive rather than importing what fit.
    */
   async function readFileContents(file: File): Promise<string[]> {
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) throw new Error(tooLarge);
+
     const isZip =
       file.name.toLowerCase().endsWith(".zip") ||
       file.type === "application/zip" ||
@@ -168,12 +194,23 @@ export function ImportMessagesDialog({
     if (!isZip) return [await file.text()];
 
     const { unzip, strFromU8 } = await import("fflate");
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    // Repair a wrapped 16-bit entry count before anything reads the archive, so an export
+    // produced by a build without the ZIP64 fix restores in full rather than silently
+    // yielding `count % 65536` messages. No-op for every well-formed archive,
+    // and it runs before the guard so the guard sees the true entry count.
+    const bytes = ensureZip64Eocd(new Uint8Array(await file.arrayBuffer())).bytes;
+    const guard = createUnzipGuard();
     // Decompress off the main thread (fflate spins up a Web Worker, allowed by the
     // CSP's worker-src 'self' blob:) so large archives don't freeze the UI.
     const entries = await new Promise<Record<string, Uint8Array>>((resolve, reject) => {
-      unzip(bytes, (err, unzipped) => (err ? reject(err) : resolve(unzipped)));
+      unzip(bytes, { filter: guard.filter }, (err, unzipped) =>
+        err ? reject(err) : resolve(unzipped)
+      );
     });
+    // The guard skips offending entries rather than throwing, so the refusal has to be raised
+    // here — otherwise a bomb would look like a partial archive and report a misleading success.
+    const violation = guard.violation();
+    if (violation) throw new Error(violation);
     // Skip directory entries (names ending in "/"); decode each remaining entry as UTF-8 text and
     // keep only those that actually contain a <message> element (mirrors Java's per-file scan, and
     // discards macOS __MACOSX/._* AppleDouble forks and .DS_Store without mis-importing them).
@@ -213,13 +250,19 @@ export function ImportMessagesDialog({
         let totalCount = 0;
         let successCount = 0;
         const failures: string[] = [];
+        // File-level failures (unreadable, oversize, bomb-guard refusal) are tracked apart from
+        // per-message failures: no message was ever parsed from these, so folding them into the
+        // "N message(s) failed" tally would misreport what happened.
+        const readFailures: string[] = [];
 
         for (const file of selectedFiles) {
           let payloads: string[];
           try {
             payloads = await readFileContents(file);
           } catch (err) {
-            failures.push(`${file.name}: ${err instanceof Error ? err.message : "could not read"}`);
+            readFailures.push(
+              `${file.name}: ${err instanceof Error ? err.message : "could not read"}`
+            );
             continue;
           }
 
@@ -244,7 +287,15 @@ export function ImportMessagesDialog({
             `${successCount} out of ${totalCount} message(s) have been successfully imported.`
           );
         }
-        if (failures.length > 0) {
+        if (readFailures.length > 0) {
+          // A file we could not read at all — surface its reason verbatim (this is where an
+          // oversize file or a tripped decompression-bomb guard lands).
+          setError(
+            readFailures.length === 1
+              ? readFailures[0]
+              : `${readFailures.length} file(s) could not be read. First error: ${readFailures[0]}`
+          );
+        } else if (failures.length > 0) {
           // Surface per-message failures instead of swallowing them; keep the dialog open.
           setError(`${failures.length} message(s) failed to import. First error: ${failures[0]}`);
         } else if (totalCount === 0) {
@@ -253,7 +304,7 @@ export function ImportMessagesDialog({
 
         onImported();
         // Only auto-close when everything succeeded, so failures stay visible.
-        if (failures.length === 0) onOpenChange(false);
+        if (failures.length === 0 && readFailures.length === 0) onOpenChange(false);
         return;
       }
 
@@ -276,69 +327,63 @@ export function ImportMessagesDialog({
 
         <div className="space-y-4 py-2">
           {/* Import From */}
-          <div className="flex items-center gap-4">
-            <Label className="w-28 text-right text-sm font-medium shrink-0">Import From:</Label>
-            <div className="flex items-center gap-4">
-              <HoverTooltip content={TIP.importFromServer}>
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="importFrom"
-                    checked={importFrom === "server"}
-                    onChange={() => {
-                      setImportFrom("server");
-                      setFilePath("");
-                      setSelectedFiles([]);
-                      setError("");
-                    }}
-                    className="accent-blue-600"
-                  />
-                  Server
-                </label>
-              </HoverTooltip>
-              <HoverTooltip content={TIP.importFromLocal}>
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="importFrom"
-                    checked={importFrom === "local"}
-                    onChange={() => {
-                      setImportFrom("local");
-                      setFilePath("");
-                      setSelectedFiles([]);
-                      setError("");
-                    }}
-                    className="accent-blue-600"
-                  />
-                  My Computer
-                </label>
-              </HoverTooltip>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleBrowse}
-                disabled={importFrom === "server"}
-              >
-                <Upload className="w-3.5 h-3.5 mr-1" />
-                Browse…
-              </Button>
-              {/* Hidden file input for My Computer mode */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept=".xml,.zip"
-                className="hidden"
-                onChange={handleFileSelect}
-              />
-            </div>
-          </div>
+          <Row label="Import From:" gap={rowGap}>
+            <HoverTooltip content={TIP.importFromServer}>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="importFrom"
+                  checked={importFrom === "server"}
+                  onChange={() => {
+                    setImportFrom("server");
+                    setFilePath("");
+                    setSelectedFiles([]);
+                    setError("");
+                  }}
+                  className="accent-blue-600"
+                />
+                Server
+              </label>
+            </HoverTooltip>
+            <HoverTooltip content={TIP.importFromLocal}>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="importFrom"
+                  checked={importFrom === "local"}
+                  onChange={() => {
+                    setImportFrom("local");
+                    setFilePath("");
+                    setSelectedFiles([]);
+                    setError("");
+                  }}
+                  className="accent-blue-600"
+                />
+                My Computer
+              </label>
+            </HoverTooltip>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleBrowse}
+              disabled={importFrom === "server"}
+            >
+              <Upload className="w-3.5 h-3.5 mr-1" />
+              Browse…
+            </Button>
+            {/* Hidden file input for My Computer mode */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".xml,.zip"
+              className="hidden"
+              onChange={handleFileSelect}
+            />
+          </Row>
 
           {/* File/Folder/Archive path */}
-          <div className="flex items-center gap-4">
-            <Label className="w-28 text-right text-sm font-medium shrink-0">
-              {importFrom === "server" ? "File/Folder/Archive:" : "File/Folder/Archive:"}
-            </Label>
+          <Row label="File/Folder/Archive:" gap={rowGap}>
             <HoverTooltip content={TIP.filePath}>
               <Input
                 value={filePath}
@@ -353,32 +398,30 @@ export function ImportMessagesDialog({
                 }
                 readOnly={importFrom === "local"}
                 density={viewDensity}
-                className={`flex-1 text-sm ${!filePath.trim() && error ? "border-red-500" : ""}`}
+                className={`flex-1 min-w-0 text-sm ${!filePath.trim() && error ? "border-red-500" : ""}`}
               />
             </HoverTooltip>
-          </div>
+          </Row>
 
           {/* Include Sub-folders — only the server importer walks folders/archives recursively;
               the local path imports the selected files directly, so the toggle would be inert. */}
           {importFrom === "server" && (
-            <div className="flex items-center gap-4">
-              <div className="w-28 shrink-0" />
+            <Row gap={rowGap}>
               <FormCheckbox
                 label="Include Sub-folders"
                 checked={includeSubfolders}
                 onChange={setIncludeSubfolders}
                 tooltip={TIP.includeSubfolders}
               />
-            </div>
+            </Row>
           )}
 
           {/* Note */}
-          <div className="flex items-center gap-4">
-            <div className="w-28 shrink-0" />
+          <Row gap={rowGap}>
             <p className="text-xs text-gray-500 dark:text-gray-400 italic">
               Note: RECEIVED, QUEUED, or PENDING messages will be set to ERROR upon import.
             </p>
-          </div>
+          </Row>
 
           {/* Error */}
           {error && (

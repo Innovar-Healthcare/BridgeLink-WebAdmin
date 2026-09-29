@@ -24,38 +24,88 @@ export interface SearchOptions {
 }
 
 /**
- * A labeled segment of searchable text extracted from a channel XML,
- * code template, global script, or config map entry.
+ * Location of one element (rule / step) inside a filter or transformer element
+ * tree, used to deep-link a search hit to the exact element it was found in.
+ *
+ * `path` is an index path with the same semantics as the editor's own selection
+ * (`flattenElements` / `getElementAtPath` in
+ * `app/(app)/channels/_lib/filter-transformer-xml.ts`): `[2]` is the 3rd
+ * top-level element, `[2, 0]` the 1st child of an Iterator at index 2. The
+ * segmenter walks the XML in document order, which is the order both parsers
+ * build `elements` in — that correspondence is pinned by a cross-check test in
+ * `__tests__/unit/channel-segmenter.test.ts`.
  */
-export interface SearchableSegment {
-  /** Human-readable location label, e.g. "Source Transformer", "Dest 1 'HL7 Out' > Filter" */
-  label: string;
-  /** The text content of this segment. */
-  content: string;
-  /** Navigation hint for click-to-open behavior. */
-  navigateTo: NavigationTarget;
+export interface FtElementRef {
+  /** Index path from the container root. */
+  path: number[];
+  /** The element's <name>, for the result label. */
+  name: string;
 }
 
 /** Where to navigate when clicking a search result. */
 export type NavigationTarget =
   | { type: "channel-summary"; channelId: string }
   | { type: "channel-scripts"; channelId: string; script: string }
-  | { type: "channel-source"; channelId: string; sub: "filter" | "transformer" | "properties" }
+  | {
+      type: "channel-source";
+      channelId: string;
+      sub: "filter" | "transformer" | "properties";
+      /** Present for filter/transformer element segments; absent for properties. */
+      element?: FtElementRef;
+    }
   | {
       type: "channel-destination";
       channelId: string;
       destIndex: number;
       destName: string;
       sub: "filter" | "transformer" | "responseTransformer" | "properties";
+      /** Present for filter/transformer element segments; absent for properties. */
+      element?: FtElementRef;
     }
   | { type: "channel-attachment"; channelId: string }
   | { type: "code-template"; templateId: string; templateName: string }
   | { type: "global-script"; scriptKey: string }
   | { type: "config-map"; entryKey: string };
 
+/**
+ * Whether a 1-based line number within a segment's `content` is also a 1-based
+ * line number in the editor buffer the segment's target opens.
+ *
+ * - `"editor"` — `content` is a verbatim editor buffer (a JavaScript step/rule
+ *   script, a channel script, a code template, a global script). A
+ *   `SearchMatch.lineNumber` can be deep-linked straight into Monaco.
+ * - `"synthetic"` — `content` is text this module built (connector properties,
+ *   the non-script fields of a Mapper/Rule Builder/XSLT step, a config map
+ *   entry). A line number is meaningless to any editor.
+ */
+export type SegmentLineBasis = "editor" | "synthetic";
+
+/**
+ * A labeled segment of searchable text extracted from a channel XML,
+ * code template, global script, or config map entry.
+ */
+export interface SearchableSegment {
+  /** Human-readable location label, e.g. "Source > Transformer > [0] 'Map PID'" */
+  label: string;
+  /** The text content of this segment. */
+  content: string;
+  /** Navigation hint for click-to-open behavior. */
+  navigateTo: NavigationTarget;
+  /**
+   * Whether `content`'s line numbers are editor line numbers. Required rather
+   * than optional so that TypeScript enumerates every construction site: a
+   * segment that silently defaulted to "editor" would deep-link to a wrong line.
+   */
+  lineBasis: SegmentLineBasis;
+}
+
 /** A single line match within a segment. */
 export interface SearchMatch {
-  /** 1-based line number within the segment content. */
+  /**
+   * 1-based line number within the segment content. When the segment's
+   * `lineBasis` is `"editor"` this is also the line number in the editor the
+   * segment's target opens, and is what gets deep-linked.
+   */
   lineNumber: number;
   /** The full text of the matching line. */
   lineText: string;

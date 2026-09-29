@@ -25,6 +25,7 @@ export type { DestinationConnectorDefinition, DestinationConnectorSectionProps }
 
 import { connectContributionSink, warnDuplicateContribution } from "@/lib/plugin-manifest";
 import { DEFAULT_DEST_PROPERTIES_XML } from "../../_lib/channel-xml";
+import { getConnectorDefaultXml } from "@/lib/connector-defaults-cache";
 import type { DestinationConnectorDefinition } from "./types";
 
 import { JavaScriptWriterConnector } from "./javascript-writer"; // Phase 5a
@@ -88,6 +89,10 @@ connectContributionSink("destinationConnectors", (def, pluginId) => {
  */
 export function destinationDefaultPropertiesXml(transportName: string): string | null {
   return (
+    // Server-instantiated defaults first for the 16 safe built-ins; a miss
+    // (group-C transport, old server, or prefetch not yet resolved) falls through to the
+    // hardcoded template, then the plugin registry.
+    getConnectorDefaultXml(transportName) ??
     DEFAULT_DEST_PROPERTIES_XML[transportName] ??
     DESTINATION_CONNECTOR_REGISTRY[transportName]?.defaultPropertiesXml ??
     null

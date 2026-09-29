@@ -25,7 +25,7 @@
  *   2. Call registerDestinationPlugin() from that plugin's index.ts.
  */
 
-import { connectContributionSink } from "@/lib/plugin-manifest";
+import { connectContributionSink, warnDuplicateContribution } from "@/lib/plugin-manifest";
 import type { DestinationPluginDefinition } from "../types";
 
 /** Mutable destination connector plugin registry. Commercial plugins self-register here. */
@@ -36,9 +36,25 @@ export function registerDestinationPlugin(plugin: DestinationPluginDefinition): 
   DESTINATION_PLUGIN_REGISTRY = [...DESTINATION_PLUGIN_REGISTRY, plugin];
 }
 
+// One claim per owned <pluginProperties> element (first-wins): two sections
+// binding the same FQN element — possible across two different extensions'
+// runtime manifests — would silently overwrite each other's XML. Compiled-in
+// sections omit ownedElementClass and are unaffected (runtime manifests can't
+// claim their elements either — the validator denylists them).
+const claimedElementClasses = new Set<string>();
+
 // Receive definePlugin() manifest contributions. Sections have no natural
-// registry key — duplicate protection is the manifest's plugin-id guard.
-connectContributionSink("destinationConnectorPlugins", (plugin) => {
+// registry key — duplicate protection is the manifest's plugin-id guard plus
+// the owned-element claim above.
+connectContributionSink("destinationConnectorPlugins", (plugin, pluginId) => {
+  const owned = plugin.ownedElementClass;
+  if (owned) {
+    if (claimedElementClasses.has(owned)) {
+      warnDuplicateContribution(pluginId, "destinationConnectorPlugin", owned);
+      return false;
+    }
+    claimedElementClasses.add(owned);
+  }
   registerDestinationPlugin(plugin);
   return true;
 });

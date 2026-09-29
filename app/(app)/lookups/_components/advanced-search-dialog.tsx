@@ -34,19 +34,21 @@ const ADV_SEARCH_COLS: ColDef<AdvSearchCol>[] = [
   { key: "value", label: "Value", defaultWidth: 220, minWidth: 80, defaultVisible: true },
 ];
 
-const OP_LABELS: Record<JsonOperator, string> = {
+// CONTAINS / NOT_CONTAINS are intentionally absent: the server never validates
+// them for any value type or database (AdvancedJsonFilterValidator.validateCore,
+// LookupJsonCapability.supportsOperator both only allow EQUAL/NOT_EQUAL for
+// STRING), so offering them just gets the user a failed search.
+const OP_LABELS: Partial<Record<JsonOperator, string>> = {
   EQUAL: "= (Equal)",
   NOT_EQUAL: "≠ (Not Equal)",
   GREATER_THAN: "> (Greater Than)",
   LESS_THAN: "< (Less Than)",
   GREATER_OR_EQUAL: "≥ (Greater or Equal)",
   LESS_OR_EQUAL: "≤ (Less or Equal)",
-  CONTAINS: "Contains",
-  NOT_CONTAINS: "Not Contains",
 };
 
 const OPS_BY_TYPE: Record<JsonValueType, JsonOperator[]> = {
-  STRING: ["EQUAL", "NOT_EQUAL", "CONTAINS", "NOT_CONTAINS"],
+  STRING: ["EQUAL", "NOT_EQUAL"],
   NUMBER: ["EQUAL", "NOT_EQUAL", "GREATER_THAN", "LESS_THAN", "GREATER_OR_EQUAL", "LESS_OR_EQUAL"],
   BOOLEAN: ["EQUAL", "NOT_EQUAL"],
 };
@@ -280,6 +282,19 @@ export function AdvancedSearchDialog({
     const blankField = rows.find((r) => !r.field.trim() && r.value.trim());
     if (incomplete || blankField) {
       setRowError("All conditions must have Field, Operator, Type, and Value filled in.");
+      return;
+    }
+    // A loaded saved filter (shared with the Java client, which still offers
+    // Contains/Not Contains) can carry an operator this dropdown no longer
+    // lists. Reject it here with a clear message instead of letting it reach
+    // the server, which always fails these operators.
+    const unsupported = rows.find(
+      (r) => r.field.trim() && r.valueType && !OPS_BY_TYPE[r.valueType].includes(r.op)
+    );
+    if (unsupported) {
+      setRowError(
+        "One or more conditions use an operator that is no longer supported (Contains / Not Contains). Choose a different operator for that condition."
+      );
       return;
     }
     const validRows = rows.filter((r) => r.field.trim());

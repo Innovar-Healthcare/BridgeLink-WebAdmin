@@ -1,0 +1,10 @@
+{
+  "manifestVersion": 2,
+  "transformerSteps": [
+    {
+      "name": "Corpus Marker",
+      "stepClass": "com.example.corpus.CorpusMarkerStep",
+      "contexts": ["source"]
+    }
+  ]
+}

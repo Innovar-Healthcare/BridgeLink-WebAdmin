@@ -8,7 +8,7 @@
  * connector-specific `defaultPropertiesXml` fallback.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Clock, Settings2 } from "lucide-react";
 import { SettingsSection, FieldRow, SummaryChip } from "@/components/settings/settings-section";
 import { HoverTooltip } from "@/components/hover-tooltip";
@@ -29,6 +29,7 @@ import {
   formatNextFireTime,
   summarizeAdvancedPolling,
 } from "@/lib/poll-next-fire-time";
+import { nextFireTime, serverSupportsCronEndpoints } from "@/lib/api/api-cron";
 
 // ─── Unit helpers ──────────────────────────────────────────────────────────────
 
@@ -51,6 +52,25 @@ function humanizeMs(ms: number): string {
   if (ms % 60_000 === 0) return `${ms / 60_000}m`;
   if (ms % 1_000 === 0) return `${ms / 1_000}s`;
   return `${ms}ms`;
+}
+
+// Compute the next-fire label with the client-side Quartz approximation. Used as the
+// baseline (shown instantly) and as the fallback when the server endpoint is unavailable.
+function clientNextFireLabel(propsXml: string): string {
+  return formatNextFireTime(computeNextFireTime(parsePollConnectorFromPropertiesXml(propsXml)));
+}
+
+/**
+ * Extract the `<pollConnectorProperties>` element from a connector `<properties>` blob as
+ * a standalone XML string for `POST /connectors/poll/_nextFireTime`. Uses DOM
+ * serialization (not a regex) so the element's `version` attribute survives — a missing
+ * version makes Core run a destructive pre-3.0 migration on deserialize (the version-stamp
+ * asymmetry). Returns null when the blob carries no poll config.
+ */
+function extractPollConnectorPropertiesXml(propsXml: string): string | null {
+  const doc = new DOMParser().parseFromString(propsXml, "application/xml");
+  const pcp = doc.querySelector("pollConnectorProperties");
+  return pcp ? new XMLSerializer().serializeToString(pcp) : null;
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -125,12 +145,46 @@ export function PollingSection({
     updatePoll({ pollingFrequency: Math.round(displayedInterval * unitFactor(newUnit)) });
   }
 
-  const nextFireLabel = useMemo(
-    () => formatNextFireTime(computeNextFireTime(pollState)),
-    // propsXml changes whenever any poll setting changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [propsXml]
-  );
+  // Next-fire preview. Server-first via _nextFireTime (real Quartz,, falling
+  // back to the client approximation when the endpoint is unavailable (old server / gate
+  // off / fetch error / no poll config). The client value is derived synchronously so
+  // there is never a loading gap; the debounced server result, once it matches the
+  // current settings, supersedes it.
+  const clientLabel = useMemo(() => clientNextFireLabel(propsXml), [propsXml]);
+  // Server result tagged with the propsXml it was computed for, so a stale response from
+  // a superseded edit is ignored (falls back to the client value) rather than shown.
+  const [serverResult, setServerResult] = useState<{ xml: string; label: string } | null>(null);
+
+  useEffect(() => {
+    const fragment = serverSupportsCronEndpoints()
+      ? extractPollConnectorPropertiesXml(propsXml)
+      : null;
+    if (!fragment) return;
+
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      nextFireTime(fragment)
+        .then((serverLabel) => {
+          if (cancelled) return;
+          // Server returns "" (no schedule) or a formatted string / "Invalid Schedule.".
+          setServerResult({ xml: propsXml, label: serverLabel === "" ? "—" : serverLabel });
+        })
+        .catch(() => {
+          // A 400 here (e.g. all-days-inactive weekly restriction) or any transport error
+          // is expected — keep the client value shown, don't surface an alert.
+        });
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [propsXml]);
+
+  // Show the server value only when it was computed for the current settings; the
+  // "(server time)" flag marks the deliberate TZ deviation from the Java client.
+  const nextFireFromServer = serverResult?.xml === propsXml;
+  const nextFireLabel = nextFireFromServer ? serverResult!.label : clientLabel;
 
   const advancedSummary = summarizeAdvancedPolling(pollState.advanced);
 
@@ -297,6 +351,11 @@ export function PollingSection({
           <span className="text-xs text-gray-500 dark:text-gray-400">
             Next poll at:{" "}
             <span className="font-medium text-gray-700 dark:text-gray-300">{nextFireLabel}</span>
+            {nextFireFromServer && (
+              <HoverTooltip content="Computed by the server's real Quartz scheduler and shown in the server's time zone, which may differ from your local time.">
+                <span className="ml-1 text-gray-400 dark:text-gray-500">(server time)</span>
+              </HoverTooltip>
+            )}
           </span>
         </div>
       </SettingsSection>

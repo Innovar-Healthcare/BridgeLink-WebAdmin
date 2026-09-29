@@ -29,6 +29,7 @@ import {
   type DestinationRef,
 } from "../_lib/source-response-options";
 import { CONNECTOR_REGISTRY, visibleSourceConnectorTypes } from "../_connectors";
+import { getConnectorDefaultXml } from "@/lib/connector-defaults-cache";
 import { PLUGIN_REGISTRY } from "../_connectors/plugins";
 import type { ValidationError } from "../_connectors/shared/validate-utils";
 import { validateListenerSettings } from "../_connectors/shared/validate-utils";
@@ -224,6 +225,10 @@ export function SourceTab({
   function applyTypeChange(newType: string) {
     setInvalidFields(new Set());
     const def = CONNECTOR_REGISTRY[newType];
+    // Server-instantiated defaults first for the 6 safe built-in source connectors
+    //; a miss (group-C source, old server, prefetch not yet resolved) falls
+    // back to the registry's hardcoded template.
+    const baseXml = getConnectorDefaultXml(newType) ?? def?.defaultPropertiesXml ?? null;
     // Reset the shared source settings (response/queue/batch/threads) to the new type's defaults,
     // mirroring Java's ChannelSetup.changeConnectorType → sourceConnectorPanel.getDefaults()/
     // setProperties(). Without this the stale values overwrite the new type's fresh defaults on
@@ -233,17 +238,19 @@ export function SourceTab({
     // displays as the server-configured default — so use that here rather than the template's 1000.
     const updates: Partial<SourceConnectorState> = {
       transportName: newType,
-      ...parseSharedSourceSettings(def?.defaultPropertiesXml ?? ""),
+      ...parseSharedSourceSettings(baseXml ?? ""),
       queueBufferSize: resolveDefaultQueueBufferSize(),
     };
-    if (def?.defaultPropertiesXml) {
-      let xml = def.defaultPropertiesXml;
+    if (baseXml) {
+      let xml = baseXml;
       for (const plugin of PLUGIN_REGISTRY) {
         if (!surfaceEnabled(plugin)) continue;
         if (plugin.injectDefaults) xml = plugin.injectDefaults(newType, xml);
       }
       // Stamp the server version into the default blob (and any plugin-injected
       // defaults) instead of shipping the {{VERSION}} placeholder to the server.
+      // withVersion is a no-op when xml already carries a real version (a server-fetched
+      // default, — it only substitutes the literal {{VERSION}} token.
       updates.propertiesXml = withVersion(xml, resolveXmlVersion());
     }
     onChange(updates);
@@ -255,7 +262,9 @@ export function SourceTab({
     // Compare current properties against defaults for the CURRENT connector type.
     // If they differ, the user has configured settings — warn before losing them.
     const currentDef = CONNECTOR_REGISTRY[transportName];
-    let currentDefault = currentDef?.defaultPropertiesXml ?? null;
+    // Compare against the same default that applyTypeChange would apply (server-first).
+    let currentDefault =
+      getConnectorDefaultXml(transportName) ?? currentDef?.defaultPropertiesXml ?? null;
     if (currentDefault) {
       for (const plugin of PLUGIN_REGISTRY) {
         if (!surfaceEnabled(plugin)) continue;

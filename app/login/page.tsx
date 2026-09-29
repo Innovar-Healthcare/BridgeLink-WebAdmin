@@ -14,7 +14,7 @@ import { generateTotpSecret, buildOtpAuthUri, verifyTotp } from "@/lib/mfa-utils
 import { Eye, EyeOff } from "lucide-react";
 import { pluginRegistry } from "@/lib/plugin-registry";
 import type { User } from "@/lib/types";
-import { getUsers } from "@/lib/api/api-users";
+import { getCurrentUser } from "@/lib/api/api-users";
 import {
   getUserPreference,
   getPublicServerSettings,
@@ -25,6 +25,10 @@ import { toast } from "sonner";
 import { FormCheckbox } from "@/components/ui/form-checkbox";
 import { InfoDialog } from "@/components/info-dialog";
 import type { ServerConfig } from "@/lib/server-allowlist";
+import {
+  markPendingPasswordChange,
+  clearPendingPasswordChange,
+} from "@/lib/pending-password-change";
 import { ChangePasswordScreen } from "./_components/change-password-screen";
 import { FirstLoginScreen } from "./_components/first-login-screen";
 import { LoginNotificationScreen } from "./_components/login-notification-screen";
@@ -109,6 +113,9 @@ function LoginPageInner() {
   const [betaAgreed, setBetaAgreed] = useState(false);
   const [showBetaAgreement, setShowBetaAgreement] = useState(false);
   const [mfaUsername, setMfaUsername] = useState("");
+  // Single-use nonce from the leg-1 MFA challenge, echoed back in both leg-2
+  // calls; the server requires and consumes it before setup/otp.
+  const [mfaNonce, setMfaNonce] = useState("");
   // Setup screen
   const [mfaSecret, setMfaSecret] = useState("");
   const [mfaQrDataUrl, setMfaQrDataUrl] = useState("");
@@ -119,6 +126,10 @@ function LoginPageInner() {
   // Post-login screen state (change-password / first-login)
   const [postLoginUser, setPostLoginUser] = useState<User | null>(null);
   const [gracePeriodMsg, setGracePeriodMsg] = useState("");
+  // True when the grace-period screen already set a compliant password, so the
+  // first-login screen must not ask for one again. Mirrors the Java client's
+  // `new FirstLoginDialog(currentUser, !passwordChanged)`.
+  const [firstLoginPasswordSet, setFirstLoginPasswordSet] = useState(false);
 
   // Login Notification & Consent state. When the server setting is enabled we
   // show the consent screen and defer the rest of the post-login routing until
@@ -141,6 +152,12 @@ function LoginPageInner() {
   // `keystoreWorking` gates the screen's buttons while the regenerate POST runs.
   const keystoreDefaultPwRef = useRef(false);
   const [keystoreWorking, setKeystoreWorking] = useState(false);
+  // True when the GET /server/publicSettings fetch below failed. A grace-period
+  // login restricted by `password.restrictgracesessions` gets a 403 there, which
+  // would silently lose the keystore warning on exactly the servers that took the
+  // trouble to harden themselves; the grace password change retries it once the
+  // restriction lifts. A ref for the same reason as the flag above.
+  const publicSettingsFailedRef = useRef(false);
 
   // Resolve the deployment mode (GET /api/config) and seed the Server field.
   // Per-tab sessionStorage wins over the cross-tab localStorage hint so logging
@@ -222,6 +239,11 @@ function LoginPageInner() {
 
   /** Clear caches and navigate into the app. The single dashboard-entry exit. */
   function finishLogin() {
+    // Every route into the app passes through here, so this is also where the
+    // pending-password-change flag is released — including on a login that never
+    // needed a password screen. That last case is what makes a stale flag
+    // self-healing instead of a /dashboard -> /login redirect loop.
+    clearPendingPasswordChange();
     clearDataCaches();
     const returnUrl = searchParams.get("returnUrl");
     const destination =
@@ -262,14 +284,27 @@ function LoginPageInner() {
     localStorage.setItem(LAST_SERVER_KEY, trimmedUrl);
     saveSession({ username: trimmedUser, serverUrl: trimmedUrl });
 
-    // Fetch users to get the current user's ID and User object.
+    // Resolve the current user's ID and User object.
+    //
+    // GET /users/current, NOT GET /users. Mirrors Java LoginPanel.handleSuccess,
+    // which calls client.getCurrentUser() in its grace-period branch before
+    // building the main window. Two reasons it has to be this endpoint:
+    //   - getAllUsers requires USERS_MANAGE, getCurrentUser requires nothing;
+    //   - getCurrentUser is on the server's `password.restrictgracesessions`
+    //     allowlist and GET /users is not, so listing users 403s for exactly the
+    //     login that most needs resolving — leaving currentUser null, skipping
+    //     both password-change branches below, and stranding the user on a
+    //     dashboard where every request is refused.
+    // It also drops an assumption: the username the server resolved can differ
+    // from the one that was typed (updatedUsername, OIDC provisioning).
     let currentUser: User | null = null;
     try {
-      const users = await getUsers();
-      currentUser = users.find((u) => u.username === trimmedUser) ?? null;
-      if (currentUser !== null) {
-        updateSession({ userId: currentUser.id });
-      }
+      currentUser = await getCurrentUser();
+      // Adopt the server's own spelling of the username, not the typed one. The
+      // whoami route resolves it from this same endpoint, so storing it here is
+      // what lets the session, the pending-password-change flag, and the new-tab
+      // rehydration all compare equal.
+      updateSession({ userId: currentUser.id, username: currentUser.username });
     } catch {
       // API failure — fall through to normal login rather than blocking.
     }
@@ -283,6 +318,7 @@ function LoginPageInner() {
     // fetch below can't leak a previous login's value (e.g. after logging out
     // of a default-password server and into a different one from this mount).
     keystoreDefaultPwRef.current = false;
+    publicSettingsFailedRef.current = false;
     try {
       const pub = await getPublicServerSettings();
       // Capture the keystore default-password flag now (same call the Java client
@@ -296,6 +332,8 @@ function LoginPageInner() {
       }
     } catch {
       // Fail-open: a public-settings failure must never block login (mirrors Java's catch).
+      // Remembered so the grace-period path can retry once the restriction lifts.
+      publicSettingsFailedRef.current = true;
     }
 
     await routeAfterLogin(result, currentUser);
@@ -304,29 +342,91 @@ function LoginPageInner() {
   // ── Route to the correct post-login screen (first-login / grace / dashboard) ──
 
   async function routeAfterLogin(result: LoginResult, currentUser: User | null) {
-    // Check "firstlogin" preference. Empty string = preference never set = first login.
-    let isFirstLogin = false;
-    if (currentUser !== null) {
-      try {
-        const pref = await getUserPreference(currentUser.id, "firstlogin");
-        isFirstLogin = pref === "" || pref === "true";
-      } catch {
-        // Fall through on preference fetch failure.
-      }
-    }
+    const isFirstLogin =
+      currentUser !== null && (await readFirstLoginPreference(currentUser.id)) === true;
 
-    // Route: first-login takes priority over grace-period (mirrors Java ordering).
+    // Route: when the preference is readable, first-login wins and its single
+    // screen collects the new password and the profile together.
+    // A grace login restricted by `password.restrictgracesessions` cannot read
+    // the preference — readFirstLoginPreference returns null and this falls to
+    // the change-password screen, which is the only thing such a session may
+    // actually do. Do not "simplify" that to a truthy check: treating an
+    // unreadable preference as unset is what greeted returning admins as
+    // first-time users and rewrote their profiles.
     if (isFirstLogin && currentUser !== null) {
       setPostLoginUser(currentUser);
       setGracePeriodMsg(result.status === "SUCCESS_GRACE_PERIOD" ? result.message : "");
+      setFirstLoginPasswordSet(false);
+      flagPendingPasswordChange(currentUser);
       setScreen("first-login");
     } else if (result.status === "SUCCESS_GRACE_PERIOD" && currentUser !== null) {
       setPostLoginUser(currentUser);
       setGracePeriodMsg(result.message);
+      flagPendingPasswordChange(currentUser);
       setScreen("change-password");
     } else {
       await completeLogin();
     }
+  }
+
+  /**
+   * Reads the "firstlogin" preference as a tri-state: true / false / null when
+   * it could not be read at all. Unset ("") counts as a first login, matching
+   * Java's `firstlogin == null || toBoolean(firstlogin)`.
+   */
+  async function readFirstLoginPreference(userId: number): Promise<boolean | null> {
+    try {
+      const pref = await getUserPreference(userId, "firstlogin");
+      if (pref === null) return null;
+      return pref === "" || pref === "true";
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Record that this login owes a password change (see lib/pending-password-change).
+   * Keyed on the resolved user's username — the same value GET /users/current
+   * gives the whoami route — so the app shell's guard compares like with like.
+   */
+  function flagPendingPasswordChange(user: User) {
+    const session = getSession();
+    if (session) markPendingPasswordChange(session.serverUrl, user.username);
+  }
+
+  // ── Grace-period password change succeeded — the session restriction is lifted ──
+
+  /**
+   * Runs after the grace-period screen sets a compliant password. The server
+   * drops the `password.restrictgracesessions` confinement on that change, so
+   * this is the first point where the two calls it had been refusing can be made.
+   */
+  async function handleGraceChangeSuccess() {
+    // Recover the default-keystore-password warning that a restricted
+    // session's 403 swallowed. Only the keystore flag is taken from the retry:
+    // the login-notification consent gate belongs before the password change in
+    // the Java client's ordering, and re-opening it here would show it out of order.
+    if (publicSettingsFailedRef.current) {
+      try {
+        const pub = await getPublicServerSettings();
+        keystoreDefaultPwRef.current = pub.keystoreUsingDefaultPassword === true;
+      } catch {
+        // Still unreadable — stay fail-open, exactly as the first attempt did.
+      }
+      publicSettingsFailedRef.current = false;
+    }
+
+    // The "firstlogin" preference is readable now. If this really was a first
+    // login, collect the profile — but without asking for a password a second
+    // time, mirroring Java's `new FirstLoginDialog(currentUser, !passwordChanged)`.
+    if (postLoginUser !== null && (await readFirstLoginPreference(postLoginUser.id)) === true) {
+      setGracePeriodMsg("");
+      setFirstLoginPasswordSet(true);
+      setScreen("first-login");
+      return;
+    }
+
+    await completeLogin();
   }
 
   // ── Login Notification consent — Accept records acknowledgment, then routes ──
@@ -353,8 +453,12 @@ function LoginPageInner() {
       // Ignore — we're logging out regardless.
     }
     clearSession();
+    // Abandoning the login abandons the obligation with it — leaving the flag
+    // behind would bounce the next login straight back here.
+    clearPendingPasswordChange();
     setPostLoginUser(null);
     setGracePeriodMsg("");
+    setFirstLoginPasswordSet(false);
     setPendingPostLogin(null);
     setLoginNotice(null);
     setAccepting(false);
@@ -378,6 +482,7 @@ function LoginPageInner() {
       } else if (result.mfa) {
         // Server requires MFA — switch to the appropriate MFA screen.
         setMfaUsername(result.mfa.username);
+        setMfaNonce(result.mfa.nonce);
         if (result.mfa.hasSecret) {
           setScreen("mfa-otp");
         } else {
@@ -429,11 +534,23 @@ function LoginPageInner() {
 
     setLoading(true);
     try {
-      const result = await loginWithMfaData(serverUrl.trim(), mfaUsername, "setup", mfaSecret);
+      const result = await loginWithMfaData(
+        serverUrl.trim(),
+        mfaUsername,
+        "setup",
+        mfaSecret,
+        mfaNonce
+      );
       if (result.status === "SUCCESS" || result.status === "SUCCESS_GRACE_PERIOD") {
         await handlePostLogin(result, serverUrl.trim(), mfaUsername);
       } else {
-        setError(result.message || "MFA setup failed. Please try again.");
+        // The server consumes the single-use leg-1 nonce before verifying the
+        // setup code, so this challenge is now spent — retrying from
+        // the setup screen would re-send a dead nonce and always fail. Return to
+        // credentials so the next Login mints a fresh leg-1 nonce, matching the
+        // Java client (LoginPanel surfaces the FAIL on the credentials form).
+        setError(result.message || "MFA setup failed. Please log in again.");
+        setScreen("credentials");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "MFA setup failed");
@@ -454,12 +571,25 @@ function LoginPageInner() {
     }
     setLoading(true);
     try {
-      const result = await loginWithMfaData(serverUrl.trim(), mfaUsername, "otp", trimmedCode);
+      const result = await loginWithMfaData(
+        serverUrl.trim(),
+        mfaUsername,
+        "otp",
+        trimmedCode,
+        mfaNonce
+      );
       if (result.status === "SUCCESS" || result.status === "SUCCESS_GRACE_PERIOD") {
         await handlePostLogin(result, serverUrl.trim(), mfaUsername);
       } else {
-        setError(result.message || "Invalid code. Please try again.");
+        // The server consumes the single-use leg-1 nonce before verifying the
+        // OTP, so a wrong code (or an expired nonce) spends this
+        // challenge — retrying from the OTP screen would re-send a dead nonce
+        // and always fail. Return to credentials so the next Login mints a fresh
+        // leg-1 nonce, matching the Java client (LoginPanel shows the FAIL on the
+        // credentials form).
+        setError(result.message || "Invalid code. Please log in again.");
         setOtpCode("");
+        setScreen("credentials");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed");
@@ -619,6 +749,7 @@ function LoginPageInner() {
                   value={serverUrl}
                   readOnly
                   aria-readonly="true"
+                  aria-describedby={serverConfig.defaultServer ? "server-locked-hint" : undefined}
                   className="font-mono text-sm bg-muted text-muted-foreground cursor-not-allowed"
                 />
               ) : (
@@ -636,6 +767,24 @@ function LoginPageInner() {
                   }
                   onInput={(e) => (e.target as HTMLInputElement).setCustomValidity("")}
                 />
+              )}
+              {(serverConfig?.mode === "single" || serverConfig?.mode === "sameHost") &&
+                serverConfig.defaultServer && (
+                  // Locked field: say where the value comes from, so it is not a dead
+                  // end. It stays read-only because the allowlist would reject an
+                  // edited value anyway.
+                  <p id="server-locked-hint" className="text-xs text-muted-foreground">
+                    Set by this WebAdmin&apos;s configuration (webadmin.conf).
+                  </p>
+                )}
+              {serverConfig?.mode === "sameHost" && !serverConfig.defaultServer && (
+                // sameHost mode with nothing to derive from: the server field is
+                // locked and empty, so surface why rather than leaving a dead-end
+                //. The env-var detail stays in the server log/docs.
+                <p className="text-sm text-destructive" role="alert">
+                  No BridgeLink server is configured for this Web Admin deployment. Contact your
+                  administrator.
+                </p>
               )}
             </div>
 
@@ -894,7 +1043,7 @@ function LoginPageInner() {
           <ChangePasswordScreen
             user={postLoginUser}
             gracePeriodMsg={gracePeriodMsg}
-            onSuccess={completeLogin}
+            onSuccess={handleGraceChangeSuccess}
             onLogout={handleLogout}
           />
         )}
@@ -904,6 +1053,7 @@ function LoginPageInner() {
           <FirstLoginScreen
             user={postLoginUser}
             gracePeriodMsg={gracePeriodMsg}
+            passwordAlreadyChanged={firstLoginPasswordSet}
             onSuccess={completeLogin}
             onLogout={handleLogout}
           />

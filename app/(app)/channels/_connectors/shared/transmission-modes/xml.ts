@@ -34,6 +34,7 @@ export function readTransmissionModeProperties(el: Element | null): Transmission
     ackBytes: MLLP_DEFAULTS.ackBytes,
     nackBytes: MLLP_DEFAULTS.nackBytes,
     maxRetries: MLLP_DEFAULTS.maxRetries,
+    extra: {},
   };
   if (!el) return base;
 

@@ -1,0 +1,29 @@
+{
+  "manifestVersion": 3,
+  "transmissionModes": [
+    {
+      "name": "Corpus Strict Mode",
+      "displayName": "Corpus Strict Framing",
+      "propertiesClass": "com.example.corpus.CorpusStrictModeProperties",
+      "defaultStartBytes": "05",
+      "defaultEndBytes": "04",
+      "startBytesValidation": [
+        { "rule": "required", "message": "Invalid start of message byte." },
+        { "rule": "pattern", "pattern": "^[0-9A-F]{1,2}$", "message": "Enter exactly one byte." }
+      ],
+      "endBytesValidation": [
+        { "rule": "required", "message": "Invalid end of message byte." },
+        { "rule": "pattern", "pattern": "^[0-9A-F]{1,2}$", "message": "Enter exactly one byte." }
+      ],
+      "fields": [
+        {
+          "key": "startOfFrameBytes",
+          "type": "text",
+          "label": "Start of Frame Byte",
+          "defaultValue": "02",
+          "validation": [{ "rule": "pattern", "pattern": "^[0-9A-F]{1,2}$" }]
+        }
+      ]
+    }
+  ]
+}

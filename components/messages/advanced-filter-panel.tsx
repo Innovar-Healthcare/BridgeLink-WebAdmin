@@ -133,6 +133,40 @@ export interface MetaDataColumnInfo {
   type: string; // "STRING" | "NUMBER" | "BOOLEAN" | "TIMESTAMP"
 }
 
+/**
+ * Reconcile persisted metadata-search rows against the channel's actual custom columns.
+ *
+ * `metaDataSearchRows` is sessionStorage-persisted, but a custom metadata column belongs to one
+ * channel — a row carried over from another channel names a column the current channel's
+ * D_MCM<n> table doesn't have. The server interpolates `columnName` straight into SQL
+ * (`AND "${element.columnName}"`) with no validation, so such a row makes every search 500
+ *. Java sidesteps this by clearing the whole metadata table on each
+ * MessageBrowser.loadChannel; we drop only the rows the channel can't satisfy.
+ *
+ * A row survives only if the channel has a column with the same name AND the same type. The type
+ * check is not redundant: a same-named column of a different type (STRING on one channel, NUMBER
+ * on another) produces valid SQL that silently matches the wrong rows — and that filter also
+ * drives Remove/Reprocess Results.
+ *
+ * Name comparison is exact, unlike the case-insensitive lookup in `buildAdvancedFilterFromUrl`.
+ * That helper tolerates user-typed URL params and canonicalizes to `matched.name`; every row
+ * reaching here was already canonicalized off `GET /channels/{id}/metaDataColumns`, either by that
+ * helper or by `addMetaDataSearchRow`.
+ *
+ * Returns the original array reference when nothing changed so callers can skip a redundant
+ * state write.
+ */
+export function reconcileMetaDataSearchRows(
+  rows: AdvancedFilterState["metaDataSearchRows"],
+  columns: MetaDataColumnInfo[]
+): AdvancedFilterState["metaDataSearchRows"] {
+  if (rows.length === 0) return rows;
+  const kept = rows.filter((r) =>
+    columns.some((c) => c.name === r.columnName && c.type === r.columnType)
+  );
+  return kept.length === rows.length ? rows : kept;
+}
+
 // ── Advanced filter state ────────────────────────────────────────────────────
 
 export interface AdvancedFilterState {
@@ -446,8 +480,17 @@ export function AdvancedFilterPanel({
     });
   }
 
-  function getColumnType(columnName: string): string {
-    return metaDataColumns.find((c) => c.name === columnName)?.type ?? "STRING";
+  /**
+   * Type to drive this row's operator list and inline validation. Falls back to the row's own
+   * persisted `columnType` before "STRING" so the panel agrees with `hasMetaDataSearchErrors` and
+   * `applyAdvancedFilter`, which both read `row.columnType`. Without the fallback an orphan row
+   * (column list empty because the fetch failed) validates as STRING in the panel but against its
+   * real type at the save gate — the search is blocked by a toast with no field marked invalid.
+   */
+  function getColumnType(row: { columnName: string; columnType: string }): string {
+    return (
+      metaDataColumns.find((c) => c.name === row.columnName)?.type ?? row.columnType ?? "STRING"
+    );
   }
 
   return (
@@ -666,7 +709,10 @@ export function AdvancedFilterPanel({
       </section>
 
       {/* ── Metadata Search ── */}
-      {metaDataColumns.length > 0 && (
+      {/* Stay mounted while rows exist even with no columns to offer: a channel switch whose
+          metaDataColumns fetch failed leaves rows unreconciled, and unmounting here would strand
+          them — invisible, unremovable, and failing every search. */}
+      {(metaDataColumns.length > 0 || state.metaDataSearchRows.length > 0) && (
         <section>
           <div className="flex items-center justify-between mb-1.5">
             <HoverTooltip content={TIP.metaDataSearch}>
@@ -679,6 +725,9 @@ export function AdvancedFilterPanel({
               size="sm"
               className="h-6 text-xs px-2"
               onClick={addMetaDataSearchRow}
+              // Nothing to add when the channel defines no custom columns. Mirrors Java
+              // MessageBrowserAdvancedFilter's addMetaDataSearchButton.setEnabled(...).
+              disabled={metaDataColumns.length === 0}
             >
               <Plus className="w-3 h-3 mr-1" />
               Add
@@ -687,12 +736,19 @@ export function AdvancedFilterPanel({
           {state.metaDataSearchRows.length > 0 ? (
             <div className="space-y-1.5">
               {state.metaDataSearchRows.map((row, idx) => {
-                const colType = getColumnType(row.columnName);
+                const colType = getColumnType(row);
                 const ops = OPERATOR_OPTIONS[colType] ?? OPERATOR_OPTIONS.STRING;
                 const valueError = metaDataSearchRowError({
                   value: row.value,
                   columnType: colType,
                 });
+                // A row whose column the channel doesn't offer (metaDataColumns fetch failed —
+                // a successful fetch reconciles these away). Radix renders nothing in the trigger
+                // for a value with no matching item, so add it as a disabled entry: the user can
+                // see which criterion is stranded and delete it, but not re-select it.
+                const isOrphan =
+                  row.columnName !== "" &&
+                  !metaDataColumns.some((mc) => mc.name === row.columnName);
                 return (
                   <div key={idx}>
                     <div className="flex items-center gap-1.5">
@@ -709,6 +765,16 @@ export function AdvancedFilterPanel({
                               {mc.name}
                             </SelectItem>
                           ))}
+                          {isOrphan && (
+                            <SelectItem
+                              key={row.columnName}
+                              value={row.columnName}
+                              disabled
+                              className="italic text-muted-foreground"
+                            >
+                              {row.columnName}
+                            </SelectItem>
+                          )}
                         </SelectContent>
                       </Select>
                       <Select

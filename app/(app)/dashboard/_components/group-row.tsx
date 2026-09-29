@@ -64,6 +64,21 @@ export function GroupRow({
   // No group-level Halt: Java force-gates Halt to a single channel (DashboardPanel.java:537-542),
   // so a "Halt All Channels" group action would be exactly the mass force-halt the guardrail forbids.
   const allIds = channels.map((c) => c.channelId);
+  const HALTABLE_STATES = [
+    "DEPLOYING",
+    "UNDEPLOYING",
+    "STARTING",
+    "STOPPING",
+    "PAUSING",
+    "SYNCING",
+    "UNKNOWN",
+  ];
+  // Undeploy is all-or-nothing for the whole group, same as the toolbar/context-menu paths
+  // (DashboardPanel.java:464-478,530-535) — a single transitioning channel in the group
+  // disables it for every channel, not just itself..
+  const groupHasHaltableNonSyncing = channels.some(
+    (c) => HALTABLE_STATES.includes(c.state ?? "") && c.state !== "SYNCING"
+  );
 
   const groupStat = (key: string) =>
     channels.reduce((s, c) => {
@@ -325,7 +340,7 @@ export function GroupRow({
         )}
         <ContextMenuItem
           onSelect={() => onGroupAction(allIds, "undeploy")}
-          disabled={allIds.length === 0}
+          disabled={allIds.length === 0 || groupHasHaltableNonSyncing}
           className="text-orange-600 focus:text-orange-600"
         >
           Undeploy All Channels

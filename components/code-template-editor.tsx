@@ -23,7 +23,6 @@
 import { MonacoEditor } from "@/components/monaco-editor";
 import type * as MonacoType from "monaco-editor";
 import { useCallback, useEffect, useRef } from "react";
-import { useTheme } from "@/lib/hooks/use-theme";
 import {
   RHINO_LANG_ID,
   registerRhinoLanguage,
@@ -93,7 +92,6 @@ export function CodeTemplateEditor({
   // rejection in React 19 Strict Mode when the component unmounts before Monaco loads.
   const monacoRef = useRef<typeof MonacoType | null>(null);
   const editorRef = useRef<MonacoType.editor.IStandaloneCodeEditor | null>(null);
-  const { isDark } = useTheme();
   const surfaceEnabled = usePluginSurfaceEnabled();
   const overlayEnabled = useSlotEnabled("editor.overlay");
 
@@ -110,8 +108,8 @@ export function CodeTemplateEditor({
   }, [surfaceEnabled]);
 
   // beforeMount fires synchronously before the Monaco editor instance is created.
-  // This guarantees "mirth-js" theme and "rhino-js" tokenizer are registered
-  // before theme="mirth-js" is applied — avoiding the silent fallback to "vs".
+  // This guarantees the "rhino-js" tokenizer is registered before the editor
+  // renders. (The theme is registered and applied by <MonacoEditor> itself.)
   // We also store the monaco instance here for use in handleMount.
   const handleBeforeMount = useCallback(
     (m: typeof MonacoType) => {
@@ -154,7 +152,6 @@ export function CodeTemplateEditor({
       <MonacoEditor
         height={height}
         defaultLanguage={RHINO_LANG_ID}
-        theme={isDark ? "mirth-js-dark" : "mirth-js"}
         defaultValue={defaultValue}
         beforeMount={handleBeforeMount}
         // Indentation (tabs vs spaces, tab size) follows the user's Code Editor

@@ -11,8 +11,15 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useVerticalSplitResize } from "@/lib/hooks/use-vertical-split-resize";
-import { ensureDcmjs } from "@/lib/dicom-tag-parser";
+import {
+  ensureDcmjs,
+  isBase64DicomLike,
+  isDicomXml,
+  dicomXmlToMsgTree,
+} from "@/lib/dicom-tag-parser";
+import { serverSupportsDataTypeEndpoints, dataTypeToTree } from "@/lib/api/api-data-types";
 import { DATA_TYPE_REGISTRY } from "../../_datatypes/index";
+import { parseXml } from "../../_datatypes/xml";
 import type { MsgTreeNode, ParseResult } from "../../_datatypes/types";
 import { splitLabel } from "@/lib/reference-data";
 import {
@@ -100,6 +107,57 @@ function buildMessageTree(
     };
   } catch {
     return { result: { error: `Template is not valid ${dataType || "message"}.` }, normalizedText };
+  }
+}
+
+// ─── Server-backed tree build ────────────────────────────────────
+// Data types with a client-side port of a server Reader: the raw message goes to
+// `POST /datatypes/_toTree` (the same Reader the Java Swing client's own Msg Tree
+// preview uses), then the returned XML is walked into a MsgTreeNode tree. HL7v2,
+// Delimited, NCPDP, and EDI/X12 use the generic XML walker (xml.tsx's parseXml) —
+// verified against each Reader's Java source that this produces an equivalent (or,
+// for NCPDP/EDI-X12, more Java-parity-correct) tree. DICOM keeps its own tree
+// builder (SQ-sequence indexing + dcmjs tag-dictionary labels don't generalize);
+// only its base64→XML decode step moves server-side.
+//
+// Returns null when `dataType` has no server-tree equivalent, so the caller falls
+// back to `buildMessageTree()` (the plugin's own `parseTemplate`).
+const SERVER_GENERIC_TREE_TYPES = new Set(["HL7V2", "DELIMITED", "NCPDP", "EDI/X12"]);
+
+async function buildMessageTreeViaServer(
+  text: string,
+  dataType: string,
+  prefix: string,
+  suffix: string
+): Promise<{ result: ParseResult; normalizedText?: string } | null> {
+  if (dataType === "DICOM") {
+    if (isDicomXml(text)) {
+      return { result: { tree: dicomXmlToMsgTree(text, prefix, suffix) } };
+    }
+    if (!isBase64DicomLike(text)) {
+      return { result: { error: `Template is not valid ${dataType}.` } };
+    }
+    try {
+      const xml = await dataTypeToTree(dataType, text);
+      return { result: { tree: dicomXmlToMsgTree(xml, prefix, suffix) }, normalizedText: xml };
+    } catch (e) {
+      return {
+        result: {
+          error: e instanceof Error ? e.message : `Unable to parse message as ${dataType}.`,
+        },
+      };
+    }
+  }
+
+  if (!SERVER_GENERIC_TREE_TYPES.has(dataType)) return null;
+
+  try {
+    const xml = await dataTypeToTree(dataType, text);
+    return { result: { tree: parseXml(xml, prefix, suffix) } };
+  } catch (e) {
+    return {
+      result: { error: e instanceof Error ? e.message : `Template is not valid ${dataType}.` },
+    };
   }
 }
 
@@ -533,10 +591,11 @@ function TreeSection({
   const [filter, setFilter] = useState("");
   const [exact, setExact] = useState(false);
 
-  // DICOM parsing depends on dcmjs (~11MB), which is loaded lazily as its own
-  // chunk via ensureDcmjs(). The parse functions are synchronous, so we preload
-  // dcmjs here before building the tree: while it loads we show a loading line,
-  // and bumping dcmjsReady re-runs the memo once the module is available.
+  // DICOM tag labels come from dcmjs's built-in dictionary (getTagDescription)
+  // regardless of whether the base64→XML conversion itself runs client-side or via
+  // the server — so dcmjs stays a dependency either way. It's loaded
+  // lazily as its own ~11MB chunk via ensureDcmjs(); while it loads we show a
+  // loading line, and bumping dcmjsReady re-runs the tree build once available.
   const needsDcmjs = dataType === "DICOM";
   const [dcmjsReady, setDcmjsReady] = useState(false);
   const [dcmjsFailed, setDcmjsFailed] = useState(false);
@@ -548,7 +607,7 @@ function TreeSection({
         if (!cancelled) setDcmjsReady(true);
       },
       () => {
-        // Chunk failed to load — stop waiting and let buildMessageTree run, which
+        // Chunk failed to load — stop waiting and let the tree build run, which
         // surfaces a normal parse error instead of hanging on the loading line.
         if (!cancelled) setDcmjsFailed(true);
       }
@@ -560,13 +619,49 @@ function TreeSection({
 
   const dicomLoading = needsDcmjs && !dcmjsReady && !dcmjsFailed && !!template?.trim();
 
-  const { result, normalizedText } = useMemo(
-    () =>
-      dicomLoading
-        ? { result: null }
-        : buildMessageTree(template, dataType, prefix, suffix, propsXml),
-    [template, dataType, prefix, suffix, propsXml, dicomLoading]
-  );
+  // Tree build: tries the server's data-type Reader first (debounced,
+  // so an in-progress edit doesn't fire a request per keystroke), falls back to
+  // the client-side plugin.parseTemplate() when the server is too old or has no
+  // equivalent for this data type. The previous tree stays on screen while a new
+  // one is building — no loading flash on every keystroke.
+  const [treeState, setTreeState] = useState<{
+    result: ParseResult | null;
+    normalizedText?: string;
+  }>({ result: null });
+
+  useEffect(() => {
+    // Empty template is rendered directly from `template` (see "No template defined."
+    // below) without consulting `result`, so there is nothing to build or reset here.
+    if (!template?.trim()) return;
+    if (dicomLoading) return;
+
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        if (serverSupportsDataTypeEndpoints()) {
+          const viaServer = await buildMessageTreeViaServer(
+            template.trim(),
+            dataType,
+            prefix,
+            suffix
+          );
+          if (viaServer) {
+            if (!cancelled) setTreeState(viaServer);
+            return;
+          }
+        }
+        const fallback = buildMessageTree(template, dataType, prefix, suffix, propsXml);
+        if (!cancelled) setTreeState(fallback);
+      })();
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [template, dataType, prefix, suffix, propsXml, dicomLoading]);
+
+  const { result, normalizedText } = treeState;
 
   // Controlled expand state — allows context menu Expand/Expand All/Collapse
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -577,12 +672,19 @@ function TreeSection({
     return computeDefaultExpandedIds(result.tree, filter.length > 0);
   }, [result, filter]);
 
-  // Reset expand state when tree structure or filter changes, and initialize
-  // on first render (lastTreeKey starts as null so the guard fires immediately).
-  const treeKey = `${template}-${dataType}-${prefix}-${suffix}-${propsXml}-${filter ? "f" : "u"}`;
-  const [lastTreeKey, setLastTreeKey] = useState<string | null>(null);
-  if (treeKey !== lastTreeKey) {
-    setLastTreeKey(treeKey);
+  // Reset expand state when a new tree finishes building or the filter changes.
+  // Keyed off `result`'s identity (a new object every time treeState resolves) rather
+  // than the raw template/dataType/... inputs: since the build is now async,
+  // `result` lags those inputs by however long the debounce + fetch took, so resetting
+  // on the inputs would fire while `result` is still the previous (or null) value and
+  // never fire again once the real tree arrives — collapsing the tree permanently.
+  const hasFilter = filter.length > 0;
+  const [lastReset, setLastReset] = useState<{ result: ParseResult | null; hasFilter: boolean }>({
+    result: null,
+    hasFilter: false,
+  });
+  if (lastReset.result !== result || lastReset.hasFilter !== hasFilter) {
+    setLastReset({ result, hasFilter });
     setExpandedIds(defaultExpandedIds);
   }
 
@@ -655,8 +757,11 @@ function TreeSection({
             Loading DICOM support…
           </p>
         ) : result === null ? (
+          // Non-empty template, first build still in flight (debounced) — no result yet.
+          // Once a tree has built at least once, treeState keeps showing it on later
+          // edits instead of clearing back to this branch.
           <p className="text-xs text-gray-400 dark:text-gray-500 italic text-center py-3">
-            Empty template.
+            Parsing…
           </p>
         ) : "error" in result ? (
           <p className="text-xs text-red-500 dark:text-red-400 italic px-2 py-2">{result.error}</p>

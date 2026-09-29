@@ -14,7 +14,6 @@ import { tryParseJs } from "@/lib/js-validation";
 function JavaScriptStepEditor({
   step,
   onChange,
-  isDark,
   showErrors,
   contextType,
   channelId,
@@ -24,7 +23,6 @@ function JavaScriptStepEditor({
     <JavaScriptPanel
       element={step}
       onChange={(el) => onChange(el as JavaScriptStep)}
-      isDark={isDark ?? false}
       showErrors={showErrors}
       contextType={contextType}
       channelId={channelId}
@@ -64,6 +62,10 @@ export const JavaScriptStepDefinition: TransformerStepDefinition<JavaScriptStep>
   validate: (step) => {
     return tryParseJs(step.script);
   },
+
+  // The raw script is what gets Rhino-validated server-side when the Core supports
+  // it; the channel-wide async validator batches these instead of running `validate` (acorn).
+  getScript: (step) => step.script,
 
   EditorPanel: JavaScriptStepEditor,
 };

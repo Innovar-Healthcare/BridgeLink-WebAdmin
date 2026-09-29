@@ -31,32 +31,71 @@ import {
   parseDestinationConnectorsFromXml,
   parseScriptsFromXml,
 } from "./channel-xml";
-import { validateChannelFiltersAndTransformers } from "./filter-transformer-validation";
-import { tryParseJs } from "@/lib/js-validation";
+import {
+  collectChannelFtSlots,
+  resolveScriptSlots,
+  type ScriptSlot,
+} from "./filter-transformer-validation";
 import { CONNECTOR_REGISTRY } from "../_connectors";
 import { DESTINATION_CONNECTOR_REGISTRY } from "../_connectors/destinations";
 import { PLUGIN_REGISTRY } from "../_connectors/plugins";
 import { DESTINATION_PLUGIN_REGISTRY } from "../_connectors/destinations/plugins";
 import { surfaceGateEnabledSnapshot } from "@/lib/plugin-gating";
+import type { ConnectorPluginDefinition } from "../_connectors/types";
+import type { DestinationPluginDefinition } from "../_connectors/destinations/types";
+import type { ValidationError } from "../_connectors/shared/validate-utils";
 
 /**
  * Validate a channel (given its full XML) the way the Java client does before
  * enabling it. Returns an array of human-readable error messages — an empty
  * array means the channel is valid and may be enabled.
  */
-export function validateChannelForEnable(channelXml: string): string[] {
+export async function validateChannelForEnable(channelXml: string): Promise<string[]> {
   const errors: string[] = [];
 
   // ── Connector properties: source + enabled destinations ──────────────────
+  // Connector `validate` is structural-only and synchronous. Connector *plugins* may carry a
+  // JavaScript script (HTTP Auth), whose parse is deferred to the server batch below via the
+  // validateNonScript/getScript split. Both connector and plugin checks are collected
+  // in tree order into `connectorChecks` and formatted after the one batch resolves — so a
+  // plugin's structural errors and its (server-resolved) script error land in a single block, in
+  // the same order they'd appear today, and every script rides the same round-trip as the
+  // filter/transformer and channel scripts.
+  const pluginSlots: ScriptSlot[] = [];
+  const pluginScripts: Record<string, string> = {};
+  const connectorChecks: { label: string; structuralMessages: string[]; slot?: ScriptSlot }[] = [];
+
+  /** Push a connector's structural errors (from `validate`) as one deferred check, no script. */
+  function pushConnectorCheck(label: string, structural: ValidationError[]) {
+    if (structural.length > 0) {
+      connectorChecks.push({ label, structuralMessages: structural.map((e) => e.message) });
+    }
+  }
+
+  /** Collect a plugin's structural errors + optional script slot as one deferred check. */
+  function collectPlugin(
+    plugin: ConnectorPluginDefinition | DestinationPluginDefinition,
+    propertiesXml: string | null,
+    label: string
+  ) {
+    const structural = (plugin.validateNonScript ?? plugin.validate)?.(propertiesXml) ?? [];
+    const script = plugin.getScript?.(propertiesXml) ?? null;
+    let slot: ScriptSlot | undefined;
+    if (script != null) {
+      const id = `plugin-${pluginSlots.length}`;
+      pluginScripts[id] = script;
+      slot = { location: "", elementName: "", elementType: "", message: null, scriptId: id };
+      pluginSlots.push(slot);
+    }
+    if (structural.length > 0 || slot) {
+      connectorChecks.push({ label, structuralMessages: structural.map((e) => e.message), slot });
+    }
+  }
+
   const src = parseSourceConnectorFromXml(channelXml);
   const srcValidate = CONNECTOR_REGISTRY[src.transportName]?.validate;
   if (srcValidate) {
-    const srcErrors = srcValidate(src.propertiesXml);
-    if (srcErrors.length > 0) {
-      errors.push(
-        `Source (${src.transportName}):\n${srcErrors.map((e) => `  - ${e.message}`).join("\n")}`
-      );
-    }
+    pushConnectorCheck(`Source (${src.transportName})`, srcValidate(src.propertiesXml));
   }
   for (const plugin of PLUGIN_REGISTRY) {
     // Skip plugins whose config section the UI gate hides (disabled/unlicensed):
@@ -64,14 +103,9 @@ export function validateChannelForEnable(channelXml: string): string[] {
     // enablement+license gate the render sites use item 2). Caches are
     // warmed by runEnableWithValidation before this runs.
     if (!surfaceGateEnabledSnapshot(plugin)) continue;
-    if (!plugin.validate) continue;
+    if (!plugin.validate && !plugin.validateNonScript && !plugin.getScript) continue;
     if (!plugin.isApplicable(src.transportName, src.propertiesXml)) continue;
-    const pluginErrors = plugin.validate(src.propertiesXml);
-    if (pluginErrors.length > 0) {
-      errors.push(
-        `Source (${src.transportName}):\n${pluginErrors.map((e) => `  - ${e.message}`).join("\n")}`
-      );
-    }
+    collectPlugin(plugin, src.propertiesXml, `Source (${src.transportName})`);
   }
 
   const dests = parseDestinationConnectorsFromXml(channelXml);
@@ -79,29 +113,16 @@ export function validateChannelForEnable(channelXml: string): string[] {
     const d = dests[i];
     // Java `checkAllForms` only validates enabled destinations.
     if (!d.enabled) continue;
+    const destLabel = `Destination ${i + 1} "${d.name}" (${d.transportName})`;
     const destValidate = DESTINATION_CONNECTOR_REGISTRY[d.transportName]?.validate;
     if (destValidate) {
-      const destErrors = destValidate(d.propertiesXml);
-      if (destErrors.length > 0) {
-        errors.push(
-          `Destination ${i + 1} "${d.name}" (${d.transportName}):\n${destErrors
-            .map((e) => `  - ${e.message}`)
-            .join("\n")}`
-        );
-      }
+      pushConnectorCheck(destLabel, destValidate(d.propertiesXml));
     }
     for (const plugin of DESTINATION_PLUGIN_REGISTRY) {
       if (!surfaceGateEnabledSnapshot(plugin)) continue;
-      if (!plugin.validate) continue;
+      if (!plugin.validate && !plugin.validateNonScript && !plugin.getScript) continue;
       if (!plugin.isApplicable(d.transportName, d.propertiesXml)) continue;
-      const pluginErrors = plugin.validate(d.propertiesXml);
-      if (pluginErrors.length > 0) {
-        errors.push(
-          `Destination ${i + 1} "${d.name}" (${d.transportName}):\n${pluginErrors
-            .map((e) => `  - ${e.message}`)
-            .join("\n")}`
-        );
-      }
+      collectPlugin(plugin, d.propertiesXml, destLabel);
     }
   }
 
@@ -116,26 +137,56 @@ export function validateChannelForEnable(channelXml: string): string[] {
   // direction since Java validates the enabled one. The trailing quote in the
   // prefix prevents partial-name matches (e.g. "Foo" vs "FooBar").
   const enabledDestPrefixes = dests.filter((d) => d.enabled).map((d) => `Destination "${d.name}"`);
-  const ftErrors = validateChannelFiltersAndTransformers(channelXml);
-  for (const e of ftErrors) {
-    const isDest = e.location.startsWith('Destination "');
-    if (isDest && !enabledDestPrefixes.some((prefix) => e.location.startsWith(prefix))) continue;
-    errors.push(`${e.location} — ${e.elementType} "${e.elementName}": ${e.message}`);
+
+  // Collect the filter/transformer script slots, then append the four channel scripts to the
+  // SAME batch so the whole enable check is a single server round-trip. Channel
+  // scripts use string ids ("channel-*") that never collide with the numeric ft ids.
+  const { slots: ftSlots, scripts } = collectChannelFtSlots(channelXml);
+
+  const channelScripts = parseScriptsFromXml(channelXml);
+  const channelScriptChecks: [string, string][] = [
+    ["Deploy", channelScripts.deploy],
+    ["Preprocessor", channelScripts.preprocessing],
+    ["Postprocessor", channelScripts.postprocessing],
+    ["Undeploy", channelScripts.undeploy],
+  ];
+  const channelSlots: ScriptSlot[] = channelScriptChecks.map(([label, script], i) => {
+    const id = `channel-${i}`;
+    scripts[id] = script;
+    return { location: "", elementName: label, elementType: "", message: null, scriptId: id };
+  });
+
+  // One batch resolves every script slot — connector plugins, filter/transformer, and
+  // the four channel scripts — in a single server round-trip (mutates the slot objects in place,
+  // so every array sees the resolved message).
+  await resolveScriptSlots([...pluginSlots, ...ftSlots, ...channelSlots], {
+    ...scripts,
+    ...pluginScripts,
+  });
+
+  // Connector + connector-plugin errors, in tree order, formatted now that plugin scripts have
+  // resolved. Each check's structural messages and its (server-resolved) script message combine
+  // into one block, matching the pre- grouping.
+  for (const check of connectorChecks) {
+    const messages = [...check.structuralMessages];
+    if (check.slot?.message) messages.push(check.slot.message);
+    if (messages.length > 0) {
+      errors.push(`${check.label}:\n${messages.map((m) => `  - ${m}`).join("\n")}`);
+    }
   }
 
-  // ── Channel scripts (Java validateScripts) ───────────────────────────────
-  const scripts = parseScriptsFromXml(channelXml);
-  const scriptChecks: [string, string][] = [
-    ["Deploy", scripts.deploy],
-    ["Preprocessor", scripts.preprocessing],
-    ["Postprocessor", scripts.postprocessing],
-    ["Undeploy", scripts.undeploy],
-  ];
-  for (const [label, script] of scriptChecks) {
-    const parseError = tryParseJs(script);
-    if (parseError) {
-      errors.push(`${label} script:\n  - ${parseError}`);
-    }
+  // Filter/transformer errors: Java validates only the source + ENABLED destinations, so drop a
+  // destination error unless its name matches an enabled destination.
+  for (const s of ftSlots) {
+    if (!s.message) continue;
+    const isDest = s.location.startsWith('Destination "');
+    if (isDest && !enabledDestPrefixes.some((prefix) => s.location.startsWith(prefix))) continue;
+    errors.push(`${s.location} — ${s.elementType} "${s.elementName}": ${s.message}`);
+  }
+
+  // Channel scripts (Java validateScripts).
+  for (const s of channelSlots) {
+    if (s.message) errors.push(`${s.elementName} script:\n  - ${s.message}`);
   }
 
   return errors;

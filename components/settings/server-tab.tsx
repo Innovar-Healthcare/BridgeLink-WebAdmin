@@ -28,11 +28,19 @@ import {
   restoreServerConfiguration,
   clearAllStatistics,
 } from "@/lib/api-client";
-import { parseServerConfigurationDate } from "@/lib/api/parse-server-configuration";
+import {
+  formatBackupTimestamp,
+  injectServerConfigurationDate,
+  normalizeVersion3,
+  parseServerConfigurationMeta,
+} from "@/lib/api/parse-server-configuration";
+import { getSession } from "@/lib/auth";
+import { compareVersions } from "@/lib/utils";
 import { clearCache } from "@/lib/cache-store";
 import { dispatchSettingsSaved } from "@/lib/hooks/use-server-info";
 import { ConfirmDialog, TypeToConfirmDialog } from "@/components/confirm-dialog";
 import { SaveDiscardCancelDialog } from "@/components/save-discard-cancel-dialog";
+import { InfoDialog } from "@/components/info-dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Dialog,
@@ -54,6 +62,8 @@ import { SettingsSection, FieldRow, RadioField } from "./settings-section";
 import { SettingsTabScroll } from "./settings-tab-scroll";
 import { ColorPickerButton } from "./color-picker-button";
 import { tagColorToHex, hexToXStreamColor } from "@/components/tag-chip";
+import { checkFileSize } from "@/lib/file-size-guard";
+import { serverSupportsStuckChannelDiagnostics } from "@/lib/api/api-dashboard";
 
 // Java's ServerSettings.DEFAULT_COLOR = new Color(0x9EB1C9)
 const DEFAULT_BG_COLOR = "#9eb1c9";
@@ -89,6 +99,8 @@ const TIP = {
   autoLogoutInterval: "Interval in minutes to automatically logout the user due to inactivity.",
   clearGlobalMap: "Toggles clearing the global map when redeploying all channels.",
   queueBufferSize: "The default source/destination queue buffer size to use for new channels.",
+  channelStopGracePeriod:
+    "How long a channel stop waits for its threads and connector hooks before failing and naming the stuck thread. The channel stays Stopping so you can inspect its threads or halt it. Blank keeps the server's current value (the default is 120 seconds); 0 waits without limit. Requires BridgeLink 26.9 or later.",
   metaDataColumn: (col: string) =>
     `If checked, the ${col} metadata column will be added by default when a user creates a new channel. The user can choose to remove the column on the channel's Summary tab.`,
   smtpHost: "SMTP host used for global SMTP settings.",
@@ -174,6 +186,8 @@ export function isValidEmailAddress(value: string): boolean {
 
 /** Max digits Java's MirthFieldConstraints allow in the queue-buffer field. */
 const QUEUE_BUFFER_MAX = 99999999; // 8 digits
+// Seconds. Six digits mirrors the Swing field's MirthFieldConstraints(6, ...).
+const STOP_GRACE_PERIOD_MAX = 999999;
 
 /**
  * Validate the Server settings before save. Mirrors SettingsPanelServer.doSave() plus Java's
@@ -191,6 +205,14 @@ export function validateServerSettings(settings: ServerSettings | null): string 
   const qbs = settings.queueBufferSize;
   if (qbs == null || !Number.isInteger(qbs) || qbs <= 0 || qbs > QUEUE_BUFFER_MAX) {
     return "Please enter a valid queue buffer size.";
+  }
+  // Optional: undefined leaves the server's stored value alone; 0 is a legitimate "no limit".
+  const grace = settings.channelStopGracePeriod;
+  if (
+    grace !== undefined &&
+    (!Number.isInteger(grace) || grace < 0 || grace > STOP_GRACE_PERIOD_MAX)
+  ) {
+    return "Please enter a channel stop grace period between 0 and 999999 seconds.";
   }
   if (settings.smtpFrom && settings.smtpFrom.trim()) {
     if (!isValidEmailAddress(settings.smtpFrom)) {
@@ -242,6 +264,9 @@ export function ServerTab({ onDirty, saveRef, actionsRef, onActionsChanged }: Se
   const [restoreOverwriteConfigMap, setRestoreOverwriteConfigMap] = useState(false);
   const [restoreXml, setRestoreXml] = useState<string | null>(null);
   const [restoreDate, setRestoreDate] = useState<string | null>(null);
+  // Non-null while the newer-version block is showing (Java's promptObjectMigration
+  // information dialog); holds the composed multi-line message.
+  const [restoreBlockMessage, setRestoreBlockMessage] = useState<string | null>(null);
   const [pendingBackup, setPendingBackup] = useState(false);
   const [pendingRestore, setPendingRestore] = useState(false);
   const restoreFileInputRef = useRef<HTMLInputElement>(null);
@@ -425,13 +450,19 @@ export function ServerTab({ onDirty, saveRef, actionsRef, onActionsChanged }: Se
   const executeBackup = async () => {
     setBackingUp(true);
     try {
-      const xml = await getServerConfigurationXml();
-      const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      // One local-time timestamp shared by the embedded <date> and the filename,
+      // exactly as Java computes it once in doBackup() (SettingsPanelServer.java:547).
+      // The server never sets <date>; stamping it client-side is what makes a WebUI
+      // backup readable by the Swing client's restore prompt finding 14).
+      const stamp = formatBackupTimestamp();
+      const xml = injectServerConfigurationDate(await getServerConfigurationXml(), stamp);
       const blob = new Blob([xml], { type: "application/xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${date} BridgeLink Backup.xml`;
+      // Java still names the file with the legacy product name
+      // (SettingsPanelServer.java:548); ours is BridgeLink.
+      a.download = `${stamp.slice(0, 10)} BridgeLink Backup.xml`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -445,16 +476,67 @@ export function ServerTab({ onDirty, saveRef, actionsRef, onActionsChanged }: Se
   };
 
   // ── Restore ──
+
+  /**
+   * Java's Frame.promptObjectMigration (Frame.java:4965-5000) hard-blocks a file
+   * that originated from a NEWER BridgeLink version, before anything destructive
+   * happens. Returns the message to display, or null to proceed.
+   *
+   * Fails open exactly like Java: an absent or unparseable version on either side
+   * never blocks (`version == null` skips the comparison entirely there). Older
+   * files are deliberately not prompted about — the server's migration pipeline
+   * handles them during the PUT. finding 16)
+   */
+  const newerVersionBlockMessage = (fileVersion: string | null): string | null => {
+    const serverVersion = getSession()?.serverVersion?.trim();
+    if (!fileVersion || !serverVersion) return null;
+    const file = normalizeVersion3(fileVersion.trim());
+    const server = normalizeVersion3(serverVersion);
+    if (compareVersions(file, server) <= 0) return null;
+    return (
+      `The server configuration being imported originated from BridgeLink version ${file}.\n` +
+      `You are using BridgeLink version ${server}.\n` +
+      `The server configuration cannot be imported, because it originated from a newer ` +
+      `version of BridgeLink.`
+    );
+  };
+
   const handleRestoreFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      toast.error(tooLarge);
+      // Reset here too — the handler's own reset sits after the read, which this return skips,
+      // and without it re-picking a same-named file fires no change event at all.
+      e.target.value = "";
+      return;
+    }
     const reader = new FileReader();
+    // Java deserializes the file BEFORE the destructive confirm and aborts with this
+    // message on any failure, including the file read (SettingsPanelServer.java:655).
+    reader.onerror = () => toast.error("Invalid server configuration file.");
     reader.onload = () => {
       const xml = reader.result as string;
+      const meta = parseServerConfigurationMeta(xml);
+
+      // Not a server configuration at all — refuse before showing the
+      // overwrite-everything dialog, instead of 500ing after the PUT. (L5)
+      if (!meta.valid) {
+        toast.error("Invalid server configuration file.");
+        return;
+      }
+
+      const blocked = newerVersionBlockMessage(meta.version);
+      if (blocked) {
+        setRestoreBlockMessage(blocked);
+        return;
+      }
+
       setRestoreXml(xml);
       // Surface the backup's embedded date in the confirm prompt, mirroring Java's
       // "Import configuration from <date>?" (SettingsPanelServer.java:599-613).
-      setRestoreDate(parseServerConfigurationDate(xml));
+      setRestoreDate(meta.date);
       setRestoreDeploy(true);
       setRestoreOverwriteConfigMap(false);
       setShowRestore(true);
@@ -491,7 +573,9 @@ export function ServerTab({ onDirty, saveRef, actionsRef, onActionsChanged }: Se
       clearCache();
       setShowRestore(false);
       setRestoreXml(null);
-      toast.success("Server configuration restored. The server is processing the import.");
+      // Java's wording (SettingsPanelServer.java:632). The import completes inside
+      // the PUT — there is no background processing to wait on.
+      toast.success("Your configuration was successfully restored.");
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to restore configuration");
@@ -656,6 +740,25 @@ export function ServerTab({ onDirty, saveRef, actionsRef, onActionsChanged }: Se
               className="w-32"
             />
           </FieldRow>
+          {/* a pre-26.9 Core rejects the unknown element on save, so the field is hidden there */}
+          {serverSupportsStuckChannelDiagnostics() && (
+            <FieldRow label="Channel Stop Grace Period (sec):" tooltip={TIP.channelStopGracePeriod}>
+              <Input
+                density={viewDensity}
+                type="number"
+                min={0}
+                value={settings.channelStopGracePeriod ?? ""}
+                onChange={(e) => {
+                  // Digits only, max 6 chars, mirroring the Swing field. Blank means
+                  // "not set here", which the server treats as "leave the stored value unchanged".
+                  const digits = e.target.value.replace(/\D/g, "").slice(0, 6);
+                  set("channelStopGracePeriod", digits ? Number(digits) : undefined);
+                }}
+                className="w-32"
+                placeholder="120"
+              />
+            </FieldRow>
+          )}
           <FieldRow label="Default Metadata Columns:">
             <div className="flex items-center gap-4">
               {(["SOURCE", "TYPE", "VERSION"] as const).map((name) => {
@@ -922,7 +1025,14 @@ export function ServerTab({ onDirty, saveRef, actionsRef, onActionsChanged }: Se
       </Dialog>
 
       {/* ── Restore Confirmation Dialog ── */}
-      <Dialog open={showRestore} onOpenChange={setShowRestore}>
+      {/* Esc and overlay clicks must not dismiss this while the PUT is in flight —
+          deploy=true can take minutes and the restore would continue invisibly. (L7) */}
+      <Dialog
+        open={showRestore}
+        onOpenChange={(open) => {
+          if (!restoring) setShowRestore(open);
+        }}
+      >
         <DialogContent className="w-[520px] sm:max-w-[95vw]">
           <DialogHeader>
             <DialogTitle>Restore Configuration</DialogTitle>
@@ -959,6 +1069,20 @@ export function ServerTab({ onDirty, saveRef, actionsRef, onActionsChanged }: Se
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── Newer-Version Block ──
+          Acknowledge-only, mirroring Java's alertInformation in
+          promptObjectMigration — hence InfoDialog rather than ConfirmDialog. */}
+      <InfoDialog
+        open={restoreBlockMessage !== null}
+        onOpenChange={(open) => {
+          if (!open) setRestoreBlockMessage(null);
+        }}
+        title="Cannot Restore Configuration"
+        maxWidth="sm:max-w-lg"
+      >
+        <p className="text-sm whitespace-pre-line">{restoreBlockMessage}</p>
+      </InfoDialog>
 
       {/* Hidden file input for restore */}
       <input

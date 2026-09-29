@@ -110,7 +110,6 @@ export function DetailPaneContent({
         <JavaScriptPanel
           element={el as JavaScriptRule}
           onChange={onChange}
-          isDark={isDark}
           showErrors={showErrors}
           contextType={contextType}
           channelId={channelId}

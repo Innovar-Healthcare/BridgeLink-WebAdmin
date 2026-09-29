@@ -265,7 +265,7 @@ function DicomSenderBottomSection({
 
       {/* Timeouts & Buffers */}
       <FieldRow label="TCP Connection Timeout (ms):">
-        <HoverTooltip content="Timeout in ms for TCP connect, no timeout by default.">
+        <HoverTooltip content="Timeout in milliseconds for TCP connect. Leave at 0 to use the engine default of 5000 ms; any positive value is applied verbatim as milliseconds.">
           {numInput("connectTo")}
         </HoverTooltip>
       </FieldRow>
@@ -274,18 +274,18 @@ function DicomSenderBottomSection({
           {numInput("acceptTo")}
         </HoverTooltip>
       </FieldRow>
-      <FieldRow label="A-RELEASE-RP timeout (s):">
-        <HoverTooltip content="Timeout in ms for receiving A-RELEASE-RP, 5s by default.">
+      <FieldRow label="A-RELEASE-RP timeout (ms):">
+        <HoverTooltip content="Timeout in milliseconds for receiving A-RELEASE-RP. Leave at 5 to use the engine default of 5000 ms; any other value is applied verbatim as milliseconds.">
           {numInput("releaseTo")}
         </HoverTooltip>
       </FieldRow>
-      <FieldRow label="DIMSE-RSP timeout (s):">
-        <HoverTooltip content="Timeout in ms for receiving DIMSE-RSP, 60s by default.">
+      <FieldRow label="DIMSE-RSP timeout (ms):">
+        <HoverTooltip content="Timeout in milliseconds for receiving DIMSE-RSP. Leave at 60 to use the engine default of 10000 ms; any other value is applied verbatim as milliseconds.">
           {numInput("rspTo")}
         </HoverTooltip>
       </FieldRow>
-      <FieldRow label="DIMSE-RSP interval period (s):">
-        <HoverTooltip content="Period in ms to check for outstanding DIMSE-RSP, 10s by default.">
+      <FieldRow label="DIMSE-RSP interval period (ms):">
+        <HoverTooltip content="Period in milliseconds between checks for outstanding DIMSE-RSP. Leave at 10 to use the engine default of 10000 ms; any other value is applied verbatim as milliseconds.">
           {numInput("reaper")}
         </HoverTooltip>
       </FieldRow>

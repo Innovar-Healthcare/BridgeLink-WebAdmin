@@ -24,6 +24,7 @@ import type {
   DashboardStatus,
 } from "./types";
 import type { ConnectorStateMap } from "./api/api-dashboard";
+import type { ScriptReference } from "./api/api-script-references";
 
 export interface ChannelPruningSettings {
   /** Days to retain message metadata. Absent = inherit global data pruner setting. */
@@ -84,6 +85,12 @@ export interface CacheStore {
   channelsRefreshedAt: Date | null;
   // Configuration map — key → resolved value. Fetched once and shared across pages.
   configMap: Map<string, string>;
+  // Script reference catalog from GET /server/scriptReferences. null until
+  // first load (or when the server predates the endpoint); consumers fall back to the
+  // frozen client catalog meanwhile. Holds the raw server list — reshaping into
+  // RefCategory[] happens in the catalog derive layer. Reset by clearCache (logout /
+  // server switch), so the next session refetches.
+  scriptReferences: ScriptReference[] | null;
 }
 
 // Module-level singleton — shared across all components
@@ -103,6 +110,7 @@ let store: CacheStore = {
   channelTags: [],
   channelsRefreshedAt: null,
   configMap: new Map(),
+  scriptReferences: null,
 };
 
 // Simple subscriber pattern so React components can react to cache updates
@@ -144,6 +152,7 @@ export function clearCache() {
     channelTags: [],
     channelsRefreshedAt: null,
     configMap: new Map(),
+    scriptReferences: null,
   };
   notify();
 }
@@ -163,6 +172,15 @@ export function updateConfigMap(entries: Map<string, string>) {
     if (same) return;
   }
   store = { ...store, configMap: entries };
+  notify();
+}
+
+/**
+ * Store the script reference catalog fetched from GET /server/scriptReferences.
+ * Fetched at most once per session; cleared on logout / server switch via clearCache().
+ */
+export function updateScriptReferences(refs: ScriptReference[]) {
+  store = { ...store, scriptReferences: refs };
   notify();
 }
 
@@ -201,7 +219,11 @@ function dashboardStatusEqual(a: DashboardStatus, b: DashboardStatus): boolean {
     a.metaDataId !== b.metaDataId ||
     a.statusType !== b.statusType ||
     a.queueEnabled !== b.queueEnabled ||
-    a.queued !== b.queued
+    a.queued !== b.queued ||
+    // the overdue flag flips while state and stats stay put (a wedged channel
+    // processes nothing), so without these two the flip would be dropped by structural sharing.
+    a.stateSince !== b.stateSince ||
+    a.lifecycleOverdue !== b.lifecycleOverdue
   ) {
     return false;
   }

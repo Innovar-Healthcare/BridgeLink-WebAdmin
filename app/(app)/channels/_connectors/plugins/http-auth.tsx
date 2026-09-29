@@ -48,7 +48,6 @@ import {
   updateHttpAuthInXml,
 } from "@/app/(app)/channels/_lib/channel-xml";
 import { useCompactMode } from "@/lib/hooks/use-compact-mode";
-import { useTheme } from "@/lib/hooks/use-theme";
 import { type BeforeMount } from "@monaco-editor/react";
 import { MonacoEditor } from "@/components/monaco-editor";
 import { ResizableEditorBox } from "@/components/resizable-editor-box";
@@ -101,16 +100,19 @@ export function digestAlgoFlags(value: DigestAlgo): { algoMD5: boolean; algoMD5s
 // ─── Validation (mirrors Java HttpAuthConnectorPropertiesPanel.checkProperties) ──
 
 /**
- * Validate an HTTP auth state per auth type, mirroring the Java client's
+ * Structural (non-script) validation for an HTTP auth state, mirroring the Java client's
  * `checkProperties` (HttpAuthConnectorPropertiesPanel.java:329-399):
  *   - Basic/Digest: realm required; at least one credential, or a credentials
  *     map variable when "Use map variable" is selected.
  *   - Custom: authenticator class required.
  *   - OAuth2: location key and verification URL required.
- * The JavaScript case (which Java does not validate) keeps the WebUI's existing
- * script-parse check as a harmless superset.
+ *
+ * The JAVASCRIPT branch contributes NO structural error here — its script is validated
+ * separately through {@link getHttpAuthScript} so the channel Save/Enable trust gate can route
+ * it to the server's real Rhino engine, mirroring how filter-transformer split
+ * `validateElementNonScript` from `getElementScript` in.
  */
-export function validateHttpAuth(state: HttpAuthState): ValidationError[] {
+export function validateHttpAuthNonScript(state: HttpAuthState): ValidationError[] {
   const errors: ValidationError[] = [];
   switch (state.authType) {
     case "BASIC":
@@ -147,11 +149,34 @@ export function validateHttpAuth(state: HttpAuthState): ValidationError[] {
         errors.push({ field: "verificationURL", message: "A verification URL is required." });
       }
       break;
-    case "JAVASCRIPT": {
-      const err = tryParseJs(state.script);
-      if (err) errors.push({ field: "script", message: err });
-      break;
-    }
+    // JAVASCRIPT: no structural check — its script is handled by getHttpAuthScript.
+  }
+  return errors;
+}
+
+/**
+ * The JavaScript source this HTTP auth state contributes to server-side (Rhino) syntax
+ * validation, or `null` when the auth type is not JavaScript. Mirrors
+ * filter-transformer's `getElementScript`.
+ */
+export function getHttpAuthScript(state: HttpAuthState): string | null {
+  return state.authType === "JAVASCRIPT" ? state.script : null;
+}
+
+/**
+ * Full synchronous validation including the client-side (acorn) JS syntax parse. Behaviorally
+ * unchanged — the JavaScript case (which Java does not validate) keeps the WebUI's existing
+ * script-parse check as a harmless superset. Still used by the manual "Validate Connector"
+ * button and the render-time inline field message, which stay on the client-side parser (both
+ * are advisory, not trust gates). Re-expressed as {@link validateHttpAuthNonScript} plus the
+ * acorn parse so the structural and script halves can't drift apart.
+ */
+export function validateHttpAuth(state: HttpAuthState): ValidationError[] {
+  const errors = validateHttpAuthNonScript(state);
+  const script = getHttpAuthScript(state);
+  if (script != null) {
+    const err = tryParseJs(script);
+    if (err) errors.push({ field: "script", message: err });
   }
   return errors;
 }
@@ -311,7 +336,6 @@ function HttpAuthSection({
   channelId = "",
 }: ConnectorSectionProps) {
   const { viewDensity } = useCompactMode();
-  const { isDark } = useTheme();
   const xml = propertiesXml ?? "";
   const state = parseHttpAuthFromXml(propertiesXml);
 
@@ -513,7 +537,6 @@ function HttpAuthSection({
                 language={RHINO_LANG_ID}
                 value={state.script}
                 onChange={(v) => update({ ...state, script: v ?? "" })}
-                theme={isDark ? "mirth-js-dark" : "mirth-js"}
                 height="100%"
                 beforeMount={storeMonaco}
                 onMount={(editor, monaco) => {
@@ -703,6 +726,16 @@ export const HttpAuthPlugin: ConnectorPluginDefinition = {
   },
   validate(propertiesXml): ValidationError[] {
     return validateHttpAuth(parseHttpAuthFromXml(propertiesXml));
+  },
+  // Trust-gate split: the channel Save/Enable path uses these two so the JS script
+  // is validated by the server's Rhino engine (with an acorn fallback on older Core) instead of
+  // the client-side approximation. `validate` above stays for the advisory "Validate Connector"
+  // button and the render-time field message.
+  validateNonScript(propertiesXml): ValidationError[] {
+    return validateHttpAuthNonScript(parseHttpAuthFromXml(propertiesXml));
+  },
+  getScript(propertiesXml): string | null {
+    return getHttpAuthScript(parseHttpAuthFromXml(propertiesXml));
   },
   Section: HttpAuthSection,
 };

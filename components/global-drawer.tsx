@@ -57,11 +57,23 @@ export function GlobalDrawer() {
         aria-hidden="true"
       />
 
-      {/* Drawer panel */}
+      {/* Drawer panel.
+          Stays mounted while closed so the slide-out exit animation can play, so the dialog
+          semantics have to be conditional — otherwise every page of the app reports
+          an open, unnamed modal off the right edge and keeps its close button in the tab order.
+          `inert` takes the closed subtree out of both the a11y tree and the tab order without
+          affecting layout or the CSS transition; the conditional role is the fallback for
+          anything that does not honor `inert`.
+
+          Deliberately NOT aria-modal: nothing moves focus into the panel on open and nothing
+          traps it, so the rest of the page really does stay keyboard-reachable. Claiming
+          aria-modal while the user's focus is still outside on the sidebar button that opened
+          the drawer leaves a screen reader with its cursor in content it has been told to
+          ignore. Re-add it in the same change that adds focus management. */}
       <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={plugin?.label ?? "Panel"}
+        role={isOpen ? "dialog" : undefined}
+        aria-label={isOpen ? (plugin?.label ?? "Panel") : undefined}
+        inert={!isOpen}
         className={cn(
           "fixed top-0 right-0 z-50 flex flex-col h-screen bg-white dark:bg-gray-900",
           "border-l border-border shadow-2xl",

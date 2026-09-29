@@ -7,6 +7,10 @@
  */
 
 import type { RepoChangesSummary } from "@/lib/plugin-registry";
+// Only `registerCacheTeardown` is imported from `lib/logout` — documented there (and in
+// `cron-verdict-cache.ts`, as safe from any reachable path including server-side,
+// which is what keeps this module importable from `plugins/version-history/index.ts`.
+import { registerCacheTeardown } from "@/lib/logout";
 
 export const CACHE_TTL = 30_000; // 30 seconds
 
@@ -18,12 +22,27 @@ export const repoChangesState = {
 };
 
 /**
+ * Drops the cached result **without** notifying subscribers. Session teardown only.
+ */
+export function resetRepoChangesCache(): void {
+  repoChangesState.cache = null;
+  repoChangesState.cacheTime = 0;
+  repoChangesState.promise = null;
+}
+
+/**
  * Clears the cached result and notifies all mounted hook instances to re-fetch.
  * Call this after any save operation that may change the uncommitted-changes set.
  */
 export function clearRepoChangesCache(): void {
-  repoChangesState.cache = null;
-  repoChangesState.cacheTime = 0;
-  repoChangesState.promise = null;
+  resetRepoChangesCache();
   repoChangesState.subscribers.forEach((cb) => cb());
 }
+
+// The registered teardown is deliberately the SILENT reset, not clearRepoChangesCache
+//. Teardown runs while the app tree is still mounted — sidebar logout calls
+// clearClientCaches() before router.replace("/login") — so notifying subscribers would
+// re-run useRepoChanges()'s fetch effect against a dead session, and that 401 sends
+// throwForStatus down window.location.href = "/login?returnUrl=...". Logout would hard
+// reload onto a returnUrl'd login instead of a clean /login. Do not "simplify" this.
+registerCacheTeardown(resetRepoChangesCache);

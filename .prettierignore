@@ -18,3 +18,7 @@ lib/api/bl-types.generated.ts
 .claude/
 # Planning docs — internal markdown, not subject to formatting checks
 .planning/
+# Work Queue benchmark output (written by bench/run.ts via JSON.stringify —.
+# Generated measurement artifacts, not source: the writer cannot emit Prettier's formatting, so
+# checking them would fail again on the next benchmark run.
+plugins/work-queue/bench/results/

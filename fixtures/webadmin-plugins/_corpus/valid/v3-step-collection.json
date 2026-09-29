@@ -1,0 +1,24 @@
+{
+  "manifestVersion": 3,
+  "transformerSteps": [
+    {
+      "name": "Corpus Collection Step",
+      "stepClass": "com.example.CorpusCollectionStep",
+      "contexts": ["source", "destination"],
+      "fields": [
+        { "key": "label", "type": "text", "label": "Label" },
+        { "key": "headers", "type": "map", "label": "Headers" },
+        {
+          "key": "rows",
+          "type": "table",
+          "label": "Rows",
+          "rowElement": "com.example.CorpusRow",
+          "columns": [
+            { "element": "name", "label": "Name" },
+            { "element": "value", "label": "Value" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -10,6 +10,32 @@ export async function getUsers(): Promise<User[]> {
 }
 
 /**
+ * GET /users/current
+ * Returns the logged-in user. Mirrors Java's mirthClient.getCurrentUser().
+ *
+ * Prefer this over getUsers() whenever all you need is "who am I":
+ * `getCurrentUser` carries no permission requirement, while `getAllUsers`
+ * (GET /users) requires USERS_MANAGE. It is also one of the few operations a
+ * grace-period login restricted by `password.restrictgracesessions` may still
+ * perform — GET /users 403s for such a session, which is why the login page
+ * resolves the current user through here. The Java client does the
+ * same for the same reason: LoginPanel.handleSuccess calls getCurrentUser()
+ * in its SUCCESS_GRACE_PERIOD branch before building the main window.
+ *
+ * XStream aliases the root object, so the normalized body is `{"user": {...}}`.
+ * "user" is not in normalizeXStream's alias set (adding it there would change
+ * every response with a lone `user` key), so unwrap here — tolerating a bare
+ * User too, which is what the FQN wrapper form normalizes to.
+ */
+export async function getCurrentUser(): Promise<User> {
+  const body = await request<unknown>("/users/current");
+  if (body !== null && typeof body === "object" && "user" in body) {
+    return (body as { user: User }).user;
+  }
+  return body as User;
+}
+
+/**
  * POST /users
  * Creates a new user. Mirrors Java's mirthClient.createUser(user).
  * Password is NOT included in the user payload — set separately via updateUserPassword().

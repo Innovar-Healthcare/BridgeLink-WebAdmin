@@ -97,7 +97,9 @@ A native tarball install is also documented in the [Tarball install guide](docs/
 ## Configuration
 
 Configuration is via environment variables (copy [`.env.example`](.env.example) to `.env.local` for
-local runs). The most common:
+local runs). On a tarball or zip install, `PORT` and `BRIDGELINK_SERVER_URL` come from
+`webadmin.conf` beside `server.js` instead, and that file overrides the environment — see the
+[Tarball install guide](docs/customer/INSTALL-TARBALL.md). The most common:
 
 | Variable                         | Description                                                                                                  |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
@@ -126,12 +128,24 @@ available separately.
 
 ## Development
 
+**Setting up a machine?** Start with [`SETUP.md`](SETUP.md) — `./scripts/setup-mac.sh` or
+`.\scripts\setup-windows.ps1` install Node and dependencies, offer to wire the commercial plugin
+overlay, and cover the common dev-server problems.
+
+Innovar engineers setting up a whole machine, or contributing across more than this repo (Core,
+Fleet, plugin Java, or working with Claude Code), should start from the internal workspace
+bootstrap rather than here — it clones every repo into the expected layout and calls the setup
+scripts above rather than duplicating them. [`ONBOARDING.md`](ONBOARDING.md) has the pointer.
+
 ```bash
 npm install
 npm run dev          # start the dev server (http://localhost:3000)
 npm run ci           # type-check, lint, format-check, and unit tests
 npm run build        # production build
 ```
+
+`npm run ci` is deliberately stricter than the GitHub PR checks — it also runs this repo's custom
+linters. Run it before every commit; a green PR does not prove a change passes.
 
 The stack is **Next.js** (App Router) + **React** + **TypeScript** (strict) + **Tailwind CSS**,
 with an in-app code editor powered by Monaco.

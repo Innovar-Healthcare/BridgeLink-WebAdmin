@@ -1,0 +1,51 @@
+{
+  "manifestVersion": 2,
+  "transformerSteps": [
+    {
+      "name": "Corpus Note",
+      "stepClass": "com.example.corpus.CorpusNoteStep",
+      "contexts": ["source", "destination"],
+      "fields": [
+        {
+          "key": "noteVariable",
+          "type": "text",
+          "label": "Variable",
+          "defaultValue": "note",
+          "validation": [
+            { "rule": "required" },
+            {
+              "rule": "pattern",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "message": "Variable must be a valid identifier."
+            }
+          ]
+        },
+        {
+          "key": "scope",
+          "type": "select",
+          "label": "Scope",
+          "defaultValue": "channel",
+          "options": [
+            { "value": "channel", "label": "Channel Map" },
+            { "value": "global", "label": "Global Map" }
+          ]
+        },
+        {
+          "key": "useCustomScript",
+          "type": "checkbox",
+          "label": "Use Custom Script",
+          "defaultValue": "false"
+        },
+        {
+          "key": "script",
+          "type": "javascript",
+          "label": "Custom Script",
+          "visibleWhen": { "field": "useCustomScript", "op": "truthy" },
+          "validation": [
+            { "rule": "required", "message": "Custom Script cannot be empty when enabled." }
+          ]
+        }
+      ]
+    }
+  ]
+}

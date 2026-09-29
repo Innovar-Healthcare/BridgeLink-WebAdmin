@@ -1,0 +1,65 @@
+{
+  "manifestVersion": 2,
+  "dataTypes": [
+    {
+      "name": "CorpusType",
+      "displayName": "Corpus Type",
+      "isBinary": true,
+      "defaultAttachmentHandler": "com.example.corpus.CorpusAttachmentHandlerProvider",
+      "propertyGroups": [
+        {
+          "group": "serialization",
+          "fields": [
+            {
+              "key": "parseMode",
+              "type": "select",
+              "label": "Parse Mode",
+              "options": [
+                { "value": "strict", "label": "Strict" },
+                { "value": "lenient", "label": "Lenient" }
+              ]
+            },
+            {
+              "key": "maxSegmentLength",
+              "type": "number",
+              "label": "Max Segment Length",
+              "visibleWhen": { "field": "parseMode", "op": "eq", "value": "strict" },
+              "validation": [{ "rule": "min", "value": 1 }]
+            }
+          ]
+        },
+        {
+          "group": "batch",
+          "fields": [
+            {
+              "key": "splitType",
+              "type": "select",
+              "label": "Split Batch By",
+              "options": [
+                { "value": "Record", "label": "Record" },
+                { "value": "JavaScript", "label": "JavaScript" }
+              ]
+            },
+            {
+              "key": "batchScript",
+              "type": "javascript",
+              "label": "JavaScript",
+              "visibleWhen": { "field": "splitType", "op": "eq", "value": "JavaScript" }
+            }
+          ]
+        },
+        {
+          "group": "responseValidation",
+          "fields": [
+            {
+              "key": "successOnAccept",
+              "type": "checkbox",
+              "label": "Successful on Accept",
+              "tooltip": "Treat an accept acknowledgment as a successful response."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

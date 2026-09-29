@@ -1,0 +1,652 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.bridgelink.online/webadmin-plugin/v2.json",
+  "title": "BridgeLink WebAdmin plugin manifest (webadmin.json) — v2",
+  "description": "Declarative UI an engine extension contributes to BridgeLink WebAdmin. Editor/CI tooling artifact for the manifest contract (docs/WEBADMIN-PLUGIN-CONTRACT.md); accepts manifestVersion 1 and 2 (the v1 schema file stays frozen for existing $schema pointers). manifestVersion 2 reserves the contribution-kind names transmissionModes, dataTypes, connectorSections, and transformerSteps: a WebAdmin build that does not implement a reserved kind skips that kind with a visible reason while the manifest's other kinds load. The hand-rolled runtime validator (lib/runtime-plugins/manifest-validator.ts) is the authoritative enforcement point and is kept in lockstep by __tests__/unit/manifest-schema-lockstep.test.ts. This schema is intentionally NO STRICTER than that validator (so an editor never flags a manifest the runtime would load); several validator rules cannot be expressed in JSON Schema and are therefore NOT checked here: action-endpoint /extensions/<path>/ prefix, condition `field` references resolving to a declared field key (for data types: a key of the SAME property group), MAX_FIELDS_PER_PANEL summed across a panel's sections (or a data type's property groups), cross-item uniqueness (transportName / tabKey / field key / data type name / property group / connector section name / connector section (mode, propertiesClass) pair / transformer step name / transformer step stepClass), the connector-section guards (a propertiesClass owned by a compiled-in section, and an appliesTo transport the same manifest declares as a connectorPanel with the same mode), the transformer-step guard (a stepClass naming one of the seven built-in step classes), and the regex catastrophic-backtracking scan. Run the CLI validator (npm run validate:manifest) or load the extension to enforce those.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifestVersion"],
+  "properties": {
+    "$schema": { "type": "string", "maxLength": 256 },
+    "manifestVersion": {
+      "enum": [1, 2],
+      "description": "Literal 1 or 2. Any other value is skipped as an unsupported manifest version. The reserved contribution kinds require manifestVersion 2."
+    },
+    "minWebAdminVersion": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^\\d+(\\.\\d+){0,3}$",
+      "description": "Minimum WebAdmin build version; a newer floor is skipped-with-reason on older builds."
+    },
+    "connectorPanels": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/connectorPanel" }
+    },
+    "settingsPanels": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/settingsPanel" }
+    },
+    "transmissionModes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/transmissionMode" },
+      "description": "Declared TCP transmission modes (manifestVersion 2 only). Counts toward the same combined 8-item cap as the other contribution kinds."
+    },
+    "dataTypes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/dataType" },
+      "description": "Declared data types (manifestVersion 2 only). Counts toward the same combined 8-item cap as the other contribution kinds."
+    },
+    "connectorSections": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/connectorSectionContribution" },
+      "description": "Sections injected into OTHER connectors' panels when applicable (manifestVersion 2 only) — the declarative ConnectorPropertiesPlugin (HTTP Auth / SSL pattern). Counts toward the same combined 8-item cap as the other contribution kinds."
+    },
+    "transformerSteps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "$ref": "#/$defs/transformerStep" },
+      "description": "Declared filter/transformer step types (manifestVersion 2 only) — the declarative TransformerStepPlugin (Mapper / JavaScript / XSLT pattern). Counts toward the same combined 8-item cap as the other contribution kinds."
+    }
+  },
+  "allOf": [
+    {
+      "description": "manifestVersion 1 is frozen: the reserved v2 contribution kinds are not allowed on a v1 manifest.",
+      "if": {
+        "properties": { "manifestVersion": { "const": 1 } },
+        "required": ["manifestVersion"]
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            { "required": ["transmissionModes"] },
+            { "required": ["dataTypes"] },
+            { "required": ["connectorSections"] },
+            { "required": ["transformerSteps"] }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "connectorPanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "transportName", "sections"],
+      "properties": {
+        "mode": { "enum": ["source", "destination"] },
+        "transportName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*$",
+          "description": "Connector registry key + Connector Type dropdown entry."
+        },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/connectorSection" }
+        },
+        "actions": { "$ref": "#/$defs/actions" }
+      }
+    },
+    "settingsPanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tabKey", "tabLabel", "sections"],
+      "properties": {
+        "tabKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9-]+$",
+          "description": "Lowercase slug; namespaced with the extension name at registration."
+        },
+        "tabLabel": { "$ref": "#/$defs/label" },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/settingsSection" }
+        },
+        "actions": { "$ref": "#/$defs/actions" }
+      }
+    },
+    "connectorSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "fields"],
+      "properties": {
+        "title": { "$ref": "#/$defs/label" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/connectorField" }
+        }
+      }
+    },
+    "settingsSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "fields"],
+      "properties": {
+        "title": { "$ref": "#/$defs/label" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/settingsField" }
+        }
+      }
+    },
+    "transmissionMode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "displayName",
+        "propertiesClass",
+        "defaultStartBytes",
+        "defaultEndBytes"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*$",
+          "description": "Mode identifier — becomes the <pluginPointName> child and the dropdown registry key. Must match the server plugin's getPluginPointName()."
+        },
+        "displayName": { "$ref": "#/$defs/label" },
+        "propertiesClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+$",
+          "description": "Fully-qualified name of the mode's TransmissionModeProperties subclass — written as the class attribute of <transmissionModeProperties>. Must be a real Java class of the extension (strict XStream)."
+        },
+        "defaultStartBytes": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[0-9A-F]*$",
+          "description": "Default start-of-message bytes: uppercase hex, empty allowed."
+        },
+        "defaultEndBytes": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[0-9A-F]*$",
+          "description": "Default end-of-message bytes: uppercase hex, empty allowed."
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/transmissionModeField" }
+        }
+      }
+    },
+    "transmissionModeField": {
+      "description": "A transmission-mode field. Its key becomes a text child element of <transmissionModeProperties> and must be a real member of the mode's Java properties class; defaultValue is allowed (the client builds the element from scratch). The keys the shared serializer owns (pluginPointName, startOfMessageBytes, endOfMessageBytes) cannot be declared.",
+      "allOf": [
+        { "$ref": "#/$defs/fieldCommon" },
+        {
+          "properties": {
+            "type": { "$ref": "#/$defs/standardFieldType" },
+            "defaultValue": { "type": "string", "maxLength": 500 },
+            "key": {
+              "not": { "enum": ["pluginPointName", "startOfMessageBytes", "endOfMessageBytes"] }
+            }
+          }
+        }
+      ]
+    },
+    "dataType": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*$",
+          "description": "The data type key — the engine plugin point name, the channel XML <inboundDataType> value, the dropdown registry key, and the datatype-defaults URL segment."
+        },
+        "displayName": { "$ref": "#/$defs/label" },
+        "isBinary": {
+          "type": "boolean",
+          "description": "Binary/opaque content type (Message Trees shows an info note instead of a tree)."
+        },
+        "defaultAttachmentHandler": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+$",
+          "description": "Fully-qualified name of an attachment-handler provider class, auto-selected when a source inbound type switches to this data type (the DICOM pattern)."
+        },
+        "propertyGroups": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/dataTypePropertyGroup" },
+          "description": "Property groups rendered in the Set Data Types dialog. Which groups show for a given connector context is host-derived (Java DataTypePropertiesTableModel parity); batch renders for source rows only and takes effect only when Process Batch is enabled on the connector."
+        }
+      }
+    },
+    "dataTypePropertyGroup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["group", "fields"],
+      "properties": {
+        "group": {
+          "enum": [
+            "serialization",
+            "deserialization",
+            "batch",
+            "responseGeneration",
+            "responseValidation"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/dataTypeField" }
+        }
+      }
+    },
+    "dataTypeField": {
+      "description": "A data type property field. Its key becomes a text child element of the group's element (<serializationProperties> etc.) and must be a real member of the extension's Java properties group class; defaults come from the engine's datatype-defaults endpoint, so defaultValue is not allowed. Additionally allows the \"javascript\" editor type (Java PropertyEditorType.JAVASCRIPT — the value is user-authored channel data executed by the engine, never by WebAdmin). Conditions may reference keys of the same group only (validator-enforced).",
+      "allOf": [
+        { "$ref": "#/$defs/fieldCommon" },
+        { "not": { "required": ["defaultValue"] } },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "text",
+                "secret",
+                "number",
+                "checkbox",
+                "select",
+                "radio",
+                "textarea",
+                "javascript"
+              ]
+            },
+            "key": {
+              "not": {
+                "enum": [
+                  "serializationProperties",
+                  "deserializationProperties",
+                  "batchProperties",
+                  "responseGenerationProperties",
+                  "responseValidationProperties"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "connectorSectionContribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "name", "propertiesClass", "appliesTo", "sections"],
+      "properties": {
+        "mode": { "enum": ["source", "destination"] },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*$",
+          "description": "Section identifier used in error paths and status UI; unique across the array (validator-enforced)."
+        },
+        "propertiesClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+$",
+          "description": "Fully-qualified name of the extension's ConnectorPluginProperties subclass — the section's element tag under the host connector's <pluginProperties>. Must be a real Java class of the extension (strict XStream). Classes owned by compiled-in sections (SSL, HTTP Auth) and duplicate (mode, propertiesClass) pairs are rejected by the runtime validator."
+        },
+        "appliesTo": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*$"
+          },
+          "description": "Transport names the section applies to (Java isSupported parity). A transport this manifest also declares as a connectorPanel with the same mode is rejected by the runtime validator (ambiguous double-render)."
+        },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/connectorSectionPanelSection" }
+        },
+        "actions": { "$ref": "#/$defs/actions" },
+        "securesTransportWhen": {
+          "anyOf": [{ "const": true }, { "$ref": "#/$defs/condition" }],
+          "description": "When the section secures the transport (drives the HTTPS URL label / SSL-configured decoration): literal true = always while the section applies, or a Condition over this contribution's field keys."
+        }
+      }
+    },
+    "connectorSectionPanelSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "fields"],
+      "properties": {
+        "title": { "$ref": "#/$defs/label" },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/connectorSectionField" }
+        }
+      }
+    },
+    "connectorSectionField": {
+      "description": "A connector-section field. Its key becomes a text child element of the section's own element under <pluginProperties> and must be a real member of the extension's Java ConnectorPluginProperties subclass; defaultValue is allowed (the client builds the element from scratch, mirroring the Swing client's panel.getDefaults()).",
+      "allOf": [
+        { "$ref": "#/$defs/fieldCommon" },
+        {
+          "properties": {
+            "type": { "$ref": "#/$defs/standardFieldType" },
+            "defaultValue": { "type": "string", "maxLength": 500 }
+          }
+        }
+      ]
+    },
+    "transformerStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "stepClass", "contexts"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]*$",
+          "description": "Step type — the registry key and the display label in the Add dropdown, the step-list table, and the detail pane. Should match the server plugin's getPluginPointName(). Unique across the array (validator-enforced)."
+        },
+        "stepClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+$",
+          "description": "Fully-qualified name of the extension's Java Step subclass — the channel-XML element tag. Must be a real Java class of the extension (strict XStream). The seven built-in step classes and duplicate stepClass values are rejected by the runtime validator."
+        },
+        "contexts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["source", "destination"] },
+          "description": "Contexts the step appears in (the Add dropdown) — the Java onlySourceConnector analog."
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/transformerStepField" }
+        }
+      }
+    },
+    "transformerStepField": {
+      "description": "A transformer-step field. Its key becomes a text child element of the step's element and must be a real member of the extension's Java Step subclass; defaultValue is allowed (the client builds the element from scratch) EXCEPT on \"javascript\" fields (a default would be manifest-supplied code). Additionally allows the \"javascript\" editor type (Java PropertyEditorType.JAVASCRIPT — the value is user-authored channel data executed by the engine, never by WebAdmin). The keys the step registry owns (name, sequenceNumber, enabled) cannot be declared.",
+      "allOf": [
+        { "$ref": "#/$defs/fieldCommon" },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "text",
+                "secret",
+                "number",
+                "checkbox",
+                "select",
+                "radio",
+                "textarea",
+                "javascript"
+              ]
+            },
+            "defaultValue": { "type": "string", "maxLength": 500 },
+            "key": { "not": { "enum": ["name", "sequenceNumber", "enabled"] } }
+          }
+        },
+        {
+          "description": "defaultValue is not allowed on \"javascript\" fields (no code ever travels in the manifest).",
+          "if": { "properties": { "type": { "const": "javascript" } }, "required": ["type"] },
+          "then": { "not": { "required": ["defaultValue"] } }
+        }
+      ]
+    },
+    "connectorField": {
+      "description": "A connector-panel field. Its key names a direct child element of the connector's <properties> XML; defaults come from the engine defaults endpoint, so defaultValue is not allowed here.",
+      "allOf": [
+        { "$ref": "#/$defs/fieldCommon" },
+        { "properties": { "type": { "$ref": "#/$defs/standardFieldType" } } },
+        { "not": { "required": ["defaultValue"] } }
+      ]
+    },
+    "settingsField": {
+      "description": "A settings-panel field. Its key maps to the extension's /extensions/{name}/properties record; defaultValue is allowed.",
+      "allOf": [
+        { "$ref": "#/$defs/fieldCommon" },
+        {
+          "properties": {
+            "type": { "$ref": "#/$defs/standardFieldType" },
+            "defaultValue": { "type": "string", "maxLength": 500 }
+          }
+        }
+      ]
+    },
+    "standardFieldType": {
+      "enum": ["text", "secret", "number", "checkbox", "select", "radio", "textarea"]
+    },
+    "fieldCommon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "label"],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z][A-Za-z0-9._-]*$"
+        },
+        "type": {
+          "type": "string",
+          "description": "The allowed enum is declared per contribution kind (dataTypeField additionally allows \"javascript\")."
+        },
+        "label": { "$ref": "#/$defs/label" },
+        "tooltip": { "type": "string", "maxLength": 500 },
+        "placeholder": { "type": "string", "maxLength": 500 },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "label"],
+            "properties": {
+              "value": { "type": "string", "maxLength": 500 },
+              "label": { "$ref": "#/$defs/label" }
+            }
+          }
+        },
+        "defaultValue": { "type": "string", "maxLength": 500 },
+        "visibleWhen": { "$ref": "#/$defs/condition" },
+        "enabledWhen": { "$ref": "#/$defs/condition" },
+        "validation": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/rule" }
+        }
+      },
+      "allOf": [
+        {
+          "description": "options are required for select/radio and forbidden otherwise.",
+          "if": { "properties": { "type": { "enum": ["select", "radio"] } }, "required": ["type"] },
+          "then": { "required": ["options"] },
+          "else": { "not": { "required": ["options"] } }
+        },
+        {
+          "description": "placeholder only on text/secret/number/textarea.",
+          "if": {
+            "properties": { "type": { "enum": ["checkbox", "select", "radio", "javascript"] } },
+            "required": ["type"]
+          },
+          "then": { "not": { "required": ["placeholder"] } }
+        },
+        {
+          "description": "javascript fields accept only the \"required\" rule (a pattern would fail closed on real script lengths; min/max are number-only anyway).",
+          "if": {
+            "properties": { "type": { "const": "javascript" } },
+            "required": ["type"]
+          },
+          "then": {
+            "properties": {
+              "validation": {
+                "items": {
+                  "type": "object",
+                  "properties": { "rule": { "const": "required" } },
+                  "required": ["rule"]
+                }
+              }
+            }
+          }
+        },
+        {
+          "description": "min/max validation rules only on number fields.",
+          "if": {
+            "properties": {
+              "validation": {
+                "contains": {
+                  "type": "object",
+                  "properties": { "rule": { "enum": ["min", "max"] } },
+                  "required": ["rule"]
+                }
+              }
+            },
+            "required": ["validation"]
+          },
+          "then": { "properties": { "type": { "const": "number" } }, "required": ["type"] }
+        }
+      ]
+    },
+    "condition": {
+      "oneOf": [
+        { "$ref": "#/$defs/leafCondition" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allOf"],
+          "properties": {
+            "allOf": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": { "$ref": "#/$defs/leafCondition" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["anyOf"],
+          "properties": {
+            "anyOf": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": { "$ref": "#/$defs/leafCondition" }
+            }
+          }
+        }
+      ]
+    },
+    "leafCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "op"],
+      "properties": {
+        "field": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "op": { "enum": ["eq", "ne", "in", "truthy"] },
+        "value": { "type": "string", "maxLength": 500 },
+        "values": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "type": "string", "maxLength": 500 }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "op": { "enum": ["eq", "ne"] } }, "required": ["op"] },
+          "then": { "required": ["value"] }
+        },
+        {
+          "if": { "properties": { "op": { "const": "in" } }, "required": ["op"] },
+          "then": { "required": ["values"] }
+        }
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule"],
+      "properties": {
+        "rule": { "enum": ["required", "pattern", "min", "max"] },
+        "pattern": { "type": "string", "maxLength": 256 },
+        "value": { "type": "number" },
+        "message": { "type": "string", "maxLength": 500 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "rule": { "const": "pattern" } }, "required": ["rule"] },
+          "then": { "required": ["pattern"] }
+        },
+        {
+          "if": { "properties": { "rule": { "enum": ["min", "max"] } }, "required": ["rule"] },
+          "then": { "required": ["value"] }
+        }
+      ]
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "endpoint", "method"],
+        "properties": {
+          "label": { "$ref": "#/$defs/label" },
+          "endpoint": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "method": { "enum": ["GET", "POST"] },
+          "confirm": { "type": "string", "maxLength": 500 }
+        }
+      }
+    },
+    "label": { "type": "string", "minLength": 1, "maxLength": 120 }
+  }
+}

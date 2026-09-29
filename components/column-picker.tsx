@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
+import { Popover } from "radix-ui";
 import { Columns, RotateCcw, GripVertical } from "lucide-react";
 import type { ColDef, ColStateMap } from "@/lib/hooks/use-column-config";
 
@@ -24,17 +25,6 @@ export function ColumnPicker<K extends string>({
   const [open, setOpen] = useState(false);
   const [dragOver, setDragOver] = useState<number | null>(null);
   const dragIdx = useRef<number | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return;
-    function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    }
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [open]);
 
   function handleDragStart(e: React.DragEvent, idx: number) {
     dragIdx.current = idx;
@@ -63,25 +53,34 @@ export function ColumnPicker<K extends string>({
   }
 
   return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        title="Show/hide/reorder columns"
-        className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded-md transition-colors ${
-          open
-            ? "border-blue-400 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-600"
-            : "border-border text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
-        }`}
-      >
-        <Columns className="w-3.5 h-3.5" />
-        Columns
-      </button>
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button
+          title="Show/hide/reorder columns"
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded-md transition-colors ${
+            open
+              ? "border-blue-400 bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-600"
+              : "border-border text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+          }`}
+        >
+          <Columns className="w-3.5 h-3.5" />
+          Columns
+        </button>
+      </Popover.Trigger>
 
-      {open && (
-        // Outer container: flex column with capped height so a long column list
-        // (e.g. Message Browser, 15+ static + dynamic metadata cols) scrolls
-        // internally instead of overflowing the viewport. See.
-        <div className="absolute right-0 top-full mt-1 z-50 flex flex-col bg-white dark:bg-gray-800 border border-border rounded-lg shadow-lg min-w-[180px] max-h-[min(70vh,32rem)] overflow-hidden">
+      <Popover.Portal>
+        {/* Outer container: flex column capped to the viewport space Radix actually
+            measured (--radix-popover-content-available-height), so a long column list
+            (e.g. Message Browser, 15+ static + dynamic metadata cols) scrolls internally
+            instead of overflowing — and, since this is portaled to document.body, it's
+            never clipped by an ancestor's overflow-hidden (e.g. a docked detail pane
+            shrinking the table container). See,. */}
+        <Popover.Content
+          align="end"
+          sideOffset={4}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          className="z-50 flex flex-col bg-white dark:bg-gray-800 border border-border rounded-lg shadow-lg min-w-[180px] max-h-[min(70vh,var(--radix-popover-content-available-height))] overflow-hidden"
+        >
           {/* Sticky header */}
           <div className="px-3 py-1 text-xs text-gray-400 dark:text-gray-500 font-medium uppercase tracking-wide select-none border-b border-border shrink-0">
             Drag to reorder
@@ -145,8 +144,8 @@ export function ColumnPicker<K extends string>({
               <RotateCcw className="w-3 h-3" /> Reset to defaults
             </button>
           </div>
-        </div>
-      )}
-    </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }

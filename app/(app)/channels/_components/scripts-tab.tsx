@@ -10,13 +10,15 @@ import { isNonDefaultScript, type ScriptsState } from "../_lib/channel-xml";
 import { cn } from "@/lib/utils";
 import { RHINO_LANG_ID, registerRhinoLanguage, setEditorContext } from "@/lib/monaco-rhino";
 import { attachRhinoValidation } from "@/lib/monaco-rhino-validation";
+import { clampLine, revealPosition } from "@/lib/monaco-reveal";
 import type { ContextType } from "@/lib/types";
 import type * as MonacoType from "monaco-editor";
 import { type EditorContext as PluginEditorContext } from "@/lib/plugin-registry";
 import { pluginSlots } from "@/lib/plugin-slots";
 import { mountPluginMonacoActions } from "@/lib/monaco-plugin-actions";
 import { usePluginSurfaceEnabled, useSlotEnabled } from "@/lib/plugin-gating";
-import { CATEGORIES, type RefItem, type RefCategory } from "@/lib/reference-data";
+import { isRefItemVisibleInContext, type RefItem, type RefCategory } from "@/lib/reference-data";
+import { useScriptReferenceCatalog } from "@/lib/script-references-catalog";
 import { FlatList } from "./filter-transformer/reference-list";
 import {
   getCodeTemplatesCached,
@@ -37,11 +39,14 @@ import {
 
 type ScriptKey = keyof ScriptsState;
 
+// Order and labels mirror the Java client's ScriptPanel.SCRIPT_TYPES, which serves both the
+// channel and global script views — hence identical to the Global Scripts page.
+// `key` values are ScriptsState keys and channel-editor deep-link params; only labels differ.
 const SCRIPTS: { key: ScriptKey; label: string }[] = [
-  { key: "preprocessing", label: "Preprocessing" },
-  { key: "postprocessing", label: "Postprocessing" },
   { key: "deploy", label: "Deploy" },
   { key: "undeploy", label: "Undeploy" },
+  { key: "preprocessing", label: "Preprocessor" },
+  { key: "postprocessing", label: "Postprocessor" },
 ];
 
 const SCRIPT_CONTEXT_TYPE: Record<ScriptKey, ContextType> = {
@@ -118,7 +123,7 @@ export function ScriptReferencePanel({
     return findDuplicateSignatures(templateMap, enabledLibs);
   }, [userTemplates, libraries, channelId]);
 
-  // If the active category is no longer in the new set (e.g. switched from Postprocessing
+  // If the active category is no longer in the new set (e.g. switched from Postprocessor
   // where "postprocessor" was visible to Deploy where it's not), reset to "All".
   useEffect(() => {
     if (categoryId !== "__all__" && !effectiveCategories.find((c) => c.id === categoryId)) {
@@ -205,23 +210,33 @@ export function ScriptReferencePanel({
 
 interface ScriptsTabProps {
   scripts: ScriptsState;
-  isDark: boolean;
   onChange: (updates: Partial<ScriptsState>) => void;
   initialScript?: ScriptKey;
+  /**
+   * Config Search deep link: 1-based line to reveal in `initialScript`
+   *. Applied once, to the editor this tab mounts with.
+   */
+  initialLine?: number;
   channelId?: string;
 }
 
 export function ScriptsTab({
   scripts,
-  isDark,
   onChange,
   initialScript,
+  initialLine,
   channelId,
 }: ScriptsTabProps) {
-  const [activeScript, setActiveScript] = useState<ScriptKey>(initialScript ?? "preprocessing");
+  // Defaults to Deploy, matching ScriptPanel's setSelectedIndex(0) and the Global Scripts page.
+  const [activeScript, setActiveScript] = useState<ScriptKey>(initialScript ?? "deploy");
   const monacoRef = useRef<typeof MonacoType | null>(null);
   const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
   const editorUriRef = useRef<string | null>(null);
+  // One-shot line reveal for a Config Search deep link. A ref, not state: it is
+  // read from Monaco's onMount, and consuming it must not re-render. Only the
+  // editor this tab mounts with gets it — switching script tabs afterwards
+  // swaps the buffer and must not re-jump.
+  const pendingRevealLineRef = useRef<number | null>(initialLine ?? null);
   const surfaceEnabled = usePluginSurfaceEnabled();
   const overlayEnabled = useSlotEnabled("editor.overlay");
 
@@ -252,6 +267,14 @@ export function ScriptsTab({
   // Store editor instance and wire up drag-drop so reference items can be dragged into the editor.
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+
+    // Config Search deep link. Runs here, not in an effect: Monaco
+    // loads asynchronously, so onMount can fire after React's mount effect.
+    const revealLine = pendingRevealLineRef.current;
+    pendingRevealLineRef.current = null;
+    if (revealLine != null) {
+      revealPosition(editor, { lineNumber: clampLine(editor, revealLine), column: 1 });
+    }
     // Real-time JS syntax validation (squiggles + hover tooltips) — same markers as the
     // Code Templates editor via the shared acorn parser. Self-cleans on dispose.
     attachRhinoValidation(editor, monaco);
@@ -311,17 +334,22 @@ export function ScriptsTab({
   // Context-filtered categories for the current script type.
   // Mirrors Java ReferenceListFactory context-set filtering:
   //   - Exclude entirely: "response" (response-transformer-only)
-  //   - "postprocessor" category: shown only for the Postprocessing script
-  //   - Per-item: scriptExclude:true items are stripped (connector/response-transformer vars)
-  //   - "message" is NOT excluded: 2 of 22 items are CONTEXT_CHANNEL (scriptExclude kept false)
-  const scriptCategories: RefCategory[] = useMemo(
-    () =>
-      CATEGORIES.filter((cat) => !SCRIPT_EXCLUDED_CATEGORIES.has(cat.id))
-        .filter((cat) => cat.id !== "postprocessor" || activeScript === "postprocessing")
-        .map((cat) => ({ ...cat, items: cat.items.filter((item) => !item.scriptExclude) }))
-        .filter((cat) => cat.items.length > 0),
-    [activeScript]
-  );
+  //   - "postprocessor" category: shown only for the Postprocessor script
+  //   - Per-item: isRefItemVisibleInContext strips items not valid in the active lifecycle
+  //     ContextType — honors the server-provided contextSet and, for the frozen
+  //     fallback, the client scriptExclude/contexts precedence (same rule global-scripts uses).
+  const catalog = useScriptReferenceCatalog();
+  const scriptCategories: RefCategory[] = useMemo(() => {
+    const ctx = SCRIPT_CONTEXT_TYPE[activeScript];
+    return catalog
+      .filter((cat) => !SCRIPT_EXCLUDED_CATEGORIES.has(cat.id))
+      .filter((cat) => cat.id !== "postprocessor" || activeScript === "postprocessing")
+      .map((cat) => ({
+        ...cat,
+        items: cat.items.filter((item) => isRefItemVisibleInContext(item, ctx)),
+      }))
+      .filter((cat) => cat.items.length > 0);
+  }, [activeScript, catalog]);
 
   // ── Resizable reference pane ───────────────────────────────────────────────
   const { width: refPanelWidth, onResizeMouseDown: onRefPanelResizeMouseDown } =
@@ -361,7 +389,6 @@ export function ScriptsTab({
             language={RHINO_LANG_ID}
             value={scripts[activeScript]}
             onChange={(v) => onChange({ [activeScript]: v ?? "" })}
-            theme={isDark ? "mirth-js-dark" : "mirth-js"}
             height="100%"
             beforeMount={storeMonaco}
             onMount={handleMount}

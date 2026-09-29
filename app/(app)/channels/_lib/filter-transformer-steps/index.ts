@@ -277,8 +277,13 @@ registerTransformerStep(IteratorStepDefinition);
 
 // Receive definePlugin() manifest contributions (first-wins by step type).
 // Connected after the built-ins above so the duplicate check sees them.
+// Rejected on a colliding type OR xmlTag: parse resolves by xmlTag
+// (resolveStepByXmlTag is first-registered-wins), so a second definition
+// claiming an already-registered tag under a different type would appear in the
+// dropdown yet mis-parse existing steps through the first definition's fields.
+// The registry itself is the claim ledger — built-ins register above first.
 connectContributionSink("transformerSteps", (def, pluginId) => {
-  if (TRANSFORMER_STEP_REGISTRY.has(def.type)) {
+  if (TRANSFORMER_STEP_REGISTRY.has(def.type) || resolveStepByXmlTag(def.xmlTag)) {
     warnDuplicateContribution(pluginId, "transformer step", def.type);
     return false;
   }

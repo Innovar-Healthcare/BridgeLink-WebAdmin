@@ -429,6 +429,7 @@ function TcpListenerBottomSection({
           ackBytes: props.ackBytes,
           nackBytes: props.nackBytes,
           maxRetries: props.maxRetries,
+          extra: props.extra,
         }}
         onSave={(updated) => update(updated)}
       />

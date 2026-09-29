@@ -6,6 +6,8 @@
  * wiring a persistent input ref into the component tree would be overkill.
  */
 
+import { checkFileSize, FileTooLargeError, MAX_IMPORT_BYTES } from "@/lib/file-size-guard";
+
 /**
  * Opens a file picker and resolves the chosen file's text content, or null if
  * the user cancels. `accept` defaults to XML files.
@@ -13,9 +15,17 @@
  * Cancellation cannot be detected reliably across browsers, so the input is
  * cleaned up on the next focus after the picker closes; the promise resolves
  * null if no file was chosen by then.
+ *
+ * A file over `maxBytes` **rejects** with `FileTooLargeError` rather than resolving
+ * null: null already means "cancelled", and collapsing the two would make
+ * an oversize pick look like the operator changed their mind — the action would
+ * silently do nothing. Callers must catch and surface the message.
  */
-export function pickFileText(accept = ".xml,application/xml"): Promise<string | null> {
-  return new Promise((resolve) => {
+export function pickFileText(
+  accept = ".xml,application/xml",
+  maxBytes: number = MAX_IMPORT_BYTES
+): Promise<string | null> {
+  return new Promise((resolve, reject) => {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = accept;
@@ -23,18 +33,31 @@ export function pickFileText(accept = ".xml,application/xml"): Promise<string | 
     document.body.appendChild(input);
 
     let settled = false;
-    const finish = (value: string | null) => {
-      if (settled) return;
+    const cleanup = () => {
       settled = true;
       window.removeEventListener("focus", onFocus);
       input.remove();
+    };
+    const finish = (value: string | null) => {
+      if (settled) return;
+      cleanup();
       resolve(value);
+    };
+    const fail = (err: Error) => {
+      if (settled) return;
+      cleanup();
+      reject(err);
     };
 
     input.addEventListener("change", () => {
       const file = input.files?.[0];
       if (!file) {
         finish(null);
+        return;
+      }
+      const tooLarge = checkFileSize(file, maxBytes);
+      if (tooLarge) {
+        fail(new FileTooLargeError(tooLarge));
         return;
       }
       file

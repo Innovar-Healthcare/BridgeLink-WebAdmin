@@ -212,7 +212,6 @@ const colHeaderCls = "text-xs font-medium text-gray-500 dark:text-gray-400 upper
 function HttpListenerBottomSection({
   propertiesXml,
   onChange,
-  isDark,
   securesTransport,
   invalidFields,
 }: ConnectorSectionProps) {
@@ -808,7 +807,6 @@ function HttpListenerBottomSection({
             onChange={(v) =>
               setCustomValueEdit((prev) => (prev ? { ...prev, draft: v ?? "" } : prev))
             }
-            theme={isDark ? "vs-dark" : "light"}
             height="100%"
             width="100%"
             options={{

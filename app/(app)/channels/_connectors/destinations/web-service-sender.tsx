@@ -90,7 +90,6 @@ const SSL_NOT_CONFIGURED_TOOLTIP =
 function WebServiceSenderBottomSection({
   propertiesXml,
   onChange,
-  isDark,
   channelId,
   channelName,
   invalidFields,
@@ -783,7 +782,6 @@ function WebServiceSenderBottomSection({
               <MonacoEditor
                 height="100%"
                 language="xml"
-                theme={isDark ? "vs-dark" : "vs"}
                 value={local.envelope}
                 onMount={handleEnvelopeMount}
                 onChange={(v) => set("envelope", v ?? "")}

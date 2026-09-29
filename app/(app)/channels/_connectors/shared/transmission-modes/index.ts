@@ -23,6 +23,7 @@ import { connectContributionSink, warnDuplicateContribution } from "@/lib/plugin
 import type { TransmissionModeDefinition, TransmissionModeSettings } from "./types";
 import { MLLP_DEFAULTS, validateTransmissionMode } from "./validate";
 import { appendTextChild, readChildText } from "./dom";
+import { MLLPSettingsSection } from "./mllp-settings-section";
 
 export {
   validateTransmissionMode,
@@ -62,6 +63,10 @@ registerTransmissionMode({
   defaultEndBytes: "1C0D",
   // MLLP mode uses MLLPModeProperties, which carries the extra MLLP v2 fields.
   propertiesClass: "com.mirth.connect.plugins.mllpmode.MLLPModeProperties",
+  // MLLP consumes the same SettingsSection hook every mode uses — the dialog
+  // has no MLLP-specific branch.
+  SettingsSection: MLLPSettingsSection,
+  sampleLabel: "MLLP Sample Frame:",
   validate,
   serialize: (s, el, doc) => {
     appendTextChild(el, "useMLLPv2", String(s.useMLLPv2), doc);

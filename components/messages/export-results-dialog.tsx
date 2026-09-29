@@ -22,7 +22,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import { Loader2, AlertCircle, Download } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -38,6 +37,7 @@ import type { MessageWriterOptions, Message } from "@/lib/types";
 import { useCompactMode } from "@/lib/hooks/use-compact-mode";
 import { FormCheckbox } from "@/components/ui/form-checkbox";
 import { embedAttachmentsXml, buildMessagesZip } from "@/components/messages/export-xml-utils";
+import { DialogFieldRow as Row } from "@/components/messages/dialog-field-row";
 
 // ─── Content type options ────────────────────────────────────────────────────
 
@@ -432,7 +432,15 @@ export function ExportResultsDialog({
           return;
         }
       } else {
-        // My Computer export — fetch messages and download
+        // My Computer export — fetch messages and download.
+        // Audit the export the same way the Server branch does: the Java MessageExportDialog
+        // emits auditExportMessages/auditExportMessagesSuccess for BOTH local and server
+        // destinations (the calls sit outside its isExportLocal() branch), so a local pull must
+        // leave the same "Export all messages" / "Successfully exported messages" server events.
+        // Omitting them here was a parity regression that let a PHI-bearing export to the user's
+        // own machine go unrecorded.
+        await auditExportMessages({});
+
         let allMessages: Message[] = [];
         let offset = 0;
         const limit = pageSize;
@@ -471,6 +479,15 @@ export function ExportResultsDialog({
           });
         }
 
+        // If no matched message carries the selected content type (e.g. exporting a Response format
+        // on a channel that never produced one), there is nothing to write. Bail before writing an
+        // empty zip / firing a misleading success toast, mirroring Java's exportCount == 0 path. This
+        // also keeps the success-audit guard below trivially consistent.
+        if (generated.length === 0) {
+          setInfo("There are no messages to export.");
+          return;
+        }
+
         async function writeLocalFile(name: string, data: string | Uint8Array) {
           if (dirHandle) {
             // Write directly to the user-selected directory via the File System Access API.
@@ -499,7 +516,24 @@ export function ExportResultsDialog({
           }
         }
 
-        toast.success(`${allMessages.length} message(s) have been exported.`);
+        // Audit success with the same attribute schema as the Server branch. exportCount is the
+        // number of message files actually written (empty-content messages were skipped and the
+        // all-empty case already returned above), i.e. the records that left the system. rootPath is
+        // the chosen local folder name when the user picked one via Browse, otherwise empty (default
+        // download folder).
+        const archiveExt = getArchiveExtension(compression);
+        await auditExportMessagesSuccess({
+          rootPath: rootPath.trim(),
+          filePattern: filePattern.trim(),
+          exportCount: String(generated.length),
+          contentType: selectedFormat.contentType ?? "",
+          encrypted: String(encrypt),
+          includeAttachments: String(isXmlFormat ? includeAttachments : false),
+          compressionFormat: archiveExt ? archiveExt.slice(1) : "",
+          passwordProtected: String(passwordProtect),
+        });
+
+        toast.success(`${generated.length} message(s) have been exported.`);
       }
 
       onOpenChange(false);
@@ -512,20 +546,19 @@ export function ExportResultsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl">
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Export Results</DialogTitle>
           <DialogDescription>Export messages from channel: {channelName}</DialogDescription>
         </DialogHeader>
 
-        <div className="flex gap-6">
+        <div className="flex flex-col lg:flex-row gap-4 lg:gap-6 min-w-0">
           {/* Left panel — main form */}
-          <div className={`flex-1 ${sectionSpacing} py-2`}>
+          <div className={`flex-1 min-w-0 ${sectionSpacing} py-2`}>
             {/* Content type */}
-            <div className={`flex items-center ${rowGap}`}>
-              <Label className="w-32 text-right text-sm font-medium shrink-0">Content:</Label>
+            <Row label="Content:" gap={rowGap}>
               <Select value={String(formatIndex)} onValueChange={(v) => setFormatIndex(Number(v))}>
-                <SelectTrigger density={viewDensity} className="flex-1 text-sm">
+                <SelectTrigger density={viewDensity} className="grow basis-48 min-w-0 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -548,29 +581,22 @@ export function ExportResultsDialog({
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <FormCheckbox
-                label="Encrypt"
-                checked={encrypt}
-                onChange={setEncrypt}
-                className="shrink-0"
-              />
+              <FormCheckbox label="Encrypt" checked={encrypt} onChange={setEncrypt} />
               <FormCheckbox
                 label="Include Attachments"
                 checked={includeAttachments}
                 onChange={setIncludeAttachments}
                 disabled={!isXmlFormat}
-                className="shrink-0"
               />
-            </div>
+            </Row>
 
             {/* Compression */}
-            <div className={`flex items-center ${rowGap}`}>
-              <Label className="w-32 text-right text-sm font-medium shrink-0">Compression:</Label>
+            <Row label="Compression:" gap={rowGap}>
               <Select
                 value={compression}
                 onValueChange={(v) => setCompression(v as CompressionOption)}
               >
-                <SelectTrigger density={viewDensity} className="w-36 text-sm">
+                <SelectTrigger density={viewDensity} className="w-36 min-w-0 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -581,112 +607,102 @@ export function ExportResultsDialog({
                   {!isLocal && <SelectItem value="tar.bz2">tar.bz2</SelectItem>}
                 </SelectContent>
               </Select>
-            </div>
+            </Row>
 
             {/* Password Protect (ZIP only) */}
-            <div className={`flex items-center ${rowGap}`}>
-              <Label className="w-32 text-right text-sm font-medium shrink-0">
-                Password Protect:
-              </Label>
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="passwordProtect"
-                    checked={passwordProtect}
-                    onChange={() => setPasswordProtect(true)}
-                    disabled={!isZip || isLocal}
-                    className="accent-blue-600"
-                  />
-                  Yes
-                </label>
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="passwordProtect"
-                    checked={!passwordProtect}
-                    onChange={() => setPasswordProtect(false)}
-                    disabled={!isZip || isLocal}
-                    className="accent-blue-600"
-                  />
-                  No
-                </label>
-                <Select
-                  value={encryptionType}
-                  onValueChange={setEncryptionType}
-                  disabled={!passwordProtect}
-                >
-                  <SelectTrigger density={viewDensity} className="w-28 text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="STANDARD">Standard</SelectItem>
-                    <SelectItem value="AES128">AES-128</SelectItem>
-                    <SelectItem value="AES256">AES-256</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+            <Row label="Password Protect:" gap={rowGap}>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="passwordProtect"
+                  checked={passwordProtect}
+                  onChange={() => setPasswordProtect(true)}
+                  disabled={!isZip || isLocal}
+                  className="accent-blue-600"
+                />
+                Yes
+              </label>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="passwordProtect"
+                  checked={!passwordProtect}
+                  onChange={() => setPasswordProtect(false)}
+                  disabled={!isZip || isLocal}
+                  className="accent-blue-600"
+                />
+                No
+              </label>
+              <Select
+                value={encryptionType}
+                onValueChange={setEncryptionType}
+                disabled={!passwordProtect}
+              >
+                <SelectTrigger density={viewDensity} className="w-28 min-w-0 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="STANDARD">Standard</SelectItem>
+                  <SelectItem value="AES128">AES-128</SelectItem>
+                  <SelectItem value="AES256">AES-256</SelectItem>
+                </SelectContent>
+              </Select>
+            </Row>
 
             {/* Password field */}
-            <div className={`flex items-center ${rowGap}`}>
-              <Label className="w-32 text-right text-sm font-medium shrink-0">Password:</Label>
+            <Row label="Password:" gap={rowGap}>
               <SecretInput
                 density={viewDensity}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={!passwordProtect}
-                className={`w-48 text-sm ${passwordProtect && !password && error ? "border-red-500" : ""}`}
+                className={`w-48 min-w-0 text-sm ${passwordProtect && !password && error ? "border-red-500" : ""}`}
                 placeholder={passwordProtect ? "Enter password…" : ""}
               />
-            </div>
+            </Row>
 
             {/* Export To */}
-            <div className={`flex items-center ${rowGap}`}>
-              <Label className="w-32 text-right text-sm font-medium shrink-0">Export To:</Label>
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="exportTo"
-                    checked={exportTo === "server"}
-                    onChange={() => {
-                      setExportTo("server");
-                      setError("");
-                    }}
-                    className="accent-blue-600"
-                  />
-                  Server
-                </label>
-                <label className="flex items-center gap-1.5 text-sm cursor-pointer">
-                  <input
-                    type="radio"
-                    name="exportTo"
-                    checked={exportTo === "local"}
-                    onChange={() => {
-                      setExportTo("local");
-                      setError("");
-                    }}
-                    className="accent-blue-600"
-                  />
-                  My Computer
-                </label>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={exportTo === "server"}
-                  onClick={handleBrowseLocal}
-                >
-                  <Download className="w-3.5 h-3.5 mr-1" />
-                  Browse…
-                </Button>
-              </div>
-            </div>
+            <Row label="Export To:" gap={rowGap}>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="exportTo"
+                  checked={exportTo === "server"}
+                  onChange={() => {
+                    setExportTo("server");
+                    setError("");
+                  }}
+                  className="accent-blue-600"
+                />
+                Server
+              </label>
+              <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                <input
+                  type="radio"
+                  name="exportTo"
+                  checked={exportTo === "local"}
+                  onChange={() => {
+                    setExportTo("local");
+                    setError("");
+                  }}
+                  className="accent-blue-600"
+                />
+                My Computer
+              </label>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={exportTo === "server"}
+                onClick={handleBrowseLocal}
+              >
+                <Download className="w-3.5 h-3.5 mr-1" />
+                Browse…
+              </Button>
+            </Row>
 
             {/* Root Path */}
-            <div className={`flex items-center ${rowGap}`}>
-              <Label className="w-32 text-right text-sm font-medium shrink-0">Root Path:</Label>
-              <div className="flex-1 flex items-center gap-1">
+            <Row label="Root Path:" gap={rowGap}>
+              <div className="flex items-center gap-1 grow basis-48 min-w-0">
                 {exportTo === "server" ? (
                   <Input
                     density={viewDensity}
@@ -696,7 +712,7 @@ export function ExportResultsDialog({
                       setError("");
                     }}
                     placeholder="Enter path on the server…"
-                    className={`flex-1 text-sm ${!rootPath.trim() && error ? "border-red-500" : ""}`}
+                    className={`flex-1 min-w-0 text-sm ${!rootPath.trim() && error ? "border-red-500" : ""}`}
                   />
                 ) : (
                   <Input
@@ -704,7 +720,7 @@ export function ExportResultsDialog({
                     value={rootPath}
                     readOnly
                     placeholder="Use Browse to select a folder…"
-                    className="flex-1 text-sm bg-gray-50 dark:bg-gray-800/50"
+                    className="flex-1 min-w-0 text-sm bg-gray-50 dark:bg-gray-800/50"
                   />
                 )}
                 {compression !== "none" && (
@@ -713,13 +729,10 @@ export function ExportResultsDialog({
                   </span>
                 )}
               </div>
-            </div>
+            </Row>
 
             {/* File Pattern */}
-            <div className="flex items-start gap-4">
-              <Label className="w-32 text-right text-sm font-medium shrink-0 pt-2">
-                File Pattern:
-              </Label>
+            <Row label="File Pattern:" gap={rowGap} align="start">
               <Textarea
                 ref={filePatternRef}
                 density={viewDensity}
@@ -729,9 +742,9 @@ export function ExportResultsDialog({
                   setError("");
                 }}
                 rows={2}
-                className={`flex-1 ${!filePattern.trim() && error ? "border-red-500" : ""}`}
+                className={`grow basis-48 min-w-0 ${!filePattern.trim() && error ? "border-red-500" : ""}`}
               />
-            </div>
+            </Row>
 
             {/* Error */}
             {error && (
@@ -750,15 +763,17 @@ export function ExportResultsDialog({
             )}
           </div>
 
-          {/* Right sidebar — variable reference */}
-          <div className="w-48 shrink-0 border-l border-border pl-4 py-2">
-            <div className="space-y-0.5">
+          {/* Right sidebar — variable reference. Below `lg` it collapses under the form
+              as a wrapping chip row: the fixed 12rem column plus the 8rem labels leaves
+              the form nothing to live in on a narrow dialog. */}
+          <div className="w-full lg:w-48 lg:shrink-0 border-t lg:border-t-0 lg:border-l border-border pt-3 pb-2 lg:pt-2 lg:pl-4">
+            <div className="flex flex-wrap gap-1 lg:block lg:space-y-0.5">
               {FILE_PATTERN_VARIABLES.map((v) => (
                 <button
                   key={v.variable}
                   type="button"
                   onClick={() => insertVariable(v.variable)}
-                  className="block w-full text-left text-sm text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 px-2 py-1 rounded transition-colors"
+                  className="lg:block w-auto lg:w-full text-left text-sm text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 px-2 py-1 rounded transition-colors"
                 >
                   {v.label}
                 </button>

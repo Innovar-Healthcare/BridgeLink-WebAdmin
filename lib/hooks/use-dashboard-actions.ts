@@ -52,6 +52,21 @@ export function isActionOutcomeAcceptable(action: ChannelAction, state: Deployed
   return !accepted || accepted.includes(state);
 }
 
+/**
+ * a stop that ran past the server's grace period returns with the channel still
+ * STOPPING and flagged `lifecycleOverdue`. The stop endpoint is called exactly as the Java client
+ * calls it (no returnErrors), so the failure is only visible through this flag; the plain
+ * "in progress" acceptance above would read it as success.
+ */
+export function isStuckAfterStop(status: DashboardStatus | undefined): boolean {
+  return !!status && status.state === "STOPPING" && status.lifecycleOverdue === true;
+}
+
+function stuckStopMessage(names: string[]): string {
+  const who = names.length === 1 ? `Channel "${names[0]}"` : `${names.length} channels`;
+  return `${who} did not stop within the stop grace period and remain${names.length === 1 ? "s" : ""} Stopping. Open Thread Diagnostics to see what is blocking, or halt the channel.`;
+}
+
 // ─── Dependency-aware actions ─────────────────────────────────────────────────
 
 /**
@@ -104,6 +119,16 @@ export function useDashboardActions(statuses: DashboardStatus[], load: () => Pro
   } | null>(null);
   const [removeAllTarget, setRemoveAllTarget] = useState<{
     channels: { channelId: string; channelName: string; channelState: string }[];
+  } | null>(null);
+  // the thread diagnostics dialog target, and the pending halt awaiting confirmation.
+  const [threadsTarget, setThreadsTarget] = useState<{
+    channelId: string;
+    channelName: string;
+  } | null>(null);
+  const [haltConfirm, setHaltConfirm] = useState<{
+    channelIds: string[];
+    /** Which handler to resume with once confirmed. */
+    via: "channel" | "group";
   } | null>(null);
   // Open dependency-chain warning prompt (null when not shown). onResolve is the
   // promise resolver wired up by resolveTargetsWithDeps below.
@@ -289,8 +314,15 @@ export function useDashboardActions(statuses: DashboardStatus[], load: () => Pro
   // ── Group-level actions ────────────────────────────────────────────────
 
   const handleGroupAction = useCallback(
-    async (channelIds: string[], action: ChannelAction) => {
+    async (channelIds: string[], action: ChannelAction, confirmed = false) => {
       if (channelIds.length === 0) return;
+
+      // Halt asks first (Java Frame.doHalt: "Are you sure you want to halt ...?"), and the Web UI
+      // adds what a halt costs: a possible duplicate and abandoned threads.
+      if (action === "halt" && !confirmed) {
+        setHaltConfirm({ channelIds, via: "group" });
+        return;
+      }
 
       let targets = channelIds;
       const depTask = ACTION_DEP_TASK[action];
@@ -320,11 +352,26 @@ export function useDashboardActions(statuses: DashboardStatus[], load: () => Pro
             break;
         }
         await load();
-        toast.success(
-          `${action.charAt(0).toUpperCase() + action.slice(1)} completed for ${targets.length} channel(s)`
-        );
+        const stuck =
+          action === "stop"
+            ? getCache()
+                .dashboardStatuses.filter(
+                  (s) => targets.includes(s.channelId) && isStuckAfterStop(s)
+                )
+                .map((s) => s.name)
+            : [];
+        if (stuck.length > 0) {
+          toast.error(stuckStopMessage(stuck), { duration: 12000 });
+        } else {
+          toast.success(
+            `${action.charAt(0).toUpperCase() + action.slice(1)} completed for ${targets.length} channel(s)`
+          );
+        }
       } catch (e) {
         toast.error(`Operation failed: ${e instanceof Error ? e.message : String(e)}`);
+        // A failed stop can leave a channel STOPPING past its grace period; refresh so
+        // the dashboard shows that now rather than on the next poll.
+        await load().catch(() => {});
       }
     },
     [load, resolveTargetsWithDeps, startResume]
@@ -343,7 +390,12 @@ export function useDashboardActions(statuses: DashboardStatus[], load: () => Pro
   // ── Channel actions ─────────────────────────────────────────────────────
 
   const handleChannelAction = useCallback(
-    async (channelId: string, action: ChannelAction) => {
+    async (channelId: string, action: ChannelAction, confirmed = false) => {
+      if (action === "halt" && !confirmed) {
+        setHaltConfirm({ channelIds: [channelId], via: "channel" });
+        return;
+      }
+
       let targets = [channelId];
       const depTask = ACTION_DEP_TASK[action];
       if (depTask) {
@@ -381,7 +433,9 @@ export function useDashboardActions(statuses: DashboardStatus[], load: () => Pro
         if (action in ACTION_ACCEPTED_STATES) {
           const fresh = getCache().dashboardStatuses;
           const ch = fresh.find((s) => s.channelId === channelId);
-          if (ch && !isActionOutcomeAcceptable(action, ch.state)) {
+          if (action === "stop" && isStuckAfterStop(ch)) {
+            toast.error(stuckStopMessage([ch!.name]), { duration: 12000 });
+          } else if (ch && !isActionOutcomeAcceptable(action, ch.state)) {
             toast.warning(
               `Channel "${ch.name}" did not ${action} successfully. Check the server log for details.`
             );
@@ -389,10 +443,30 @@ export function useDashboardActions(statuses: DashboardStatus[], load: () => Pro
         }
       } catch (e) {
         toast.error(`Operation failed: ${e instanceof Error ? e.message : String(e)}`);
+        await load().catch(() => {});
       }
     },
     [load, resolveTargetsWithDeps, startResume]
   );
+
+  /** The halt confirmation's OK: run the halt that was parked in haltConfirm. */
+  const confirmHalt = useCallback(() => {
+    const pending = haltConfirm;
+    setHaltConfirm(null);
+    if (!pending) return;
+    if (pending.via === "channel" && pending.channelIds.length === 1) {
+      void handleChannelAction(pending.channelIds[0], "halt", true);
+    } else {
+      void handleGroupAction(pending.channelIds, "halt", true);
+    }
+  }, [haltConfirm, handleChannelAction, handleGroupAction]);
+
+  const cancelHalt = useCallback(() => setHaltConfirm(null), []);
+
+  /** Open the thread diagnostics dialog for one channel. */
+  const handleViewThreads = useCallback((channelId: string, channelName: string) => {
+    setThreadsTarget({ channelId, channelName });
+  }, []);
 
   // Context-menu Clear Statistics / Remove All Messages, selection-aware: when the
   // right-clicked row is part of a multi-selection, act on EVERY selected channel
@@ -435,7 +509,13 @@ export function useDashboardActions(statuses: DashboardStatus[], load: () => Pro
     removeAllTarget,
     setRemoveAllTarget,
     depPrompt,
+    threadsTarget,
+    setThreadsTarget,
+    haltConfirm,
+    confirmHalt,
+    cancelHalt,
     // Handlers
+    handleViewThreads,
     handleViewMessages,
     handleOpenSendMessage,
     handleDashboardSendMessage,

@@ -6,6 +6,7 @@ import { FormDialog } from "@/components/form-dialog";
 import { Button } from "@/components/ui/button";
 import { HoverTooltip } from "@/components/hover-tooltip";
 import type { CodeTemplate, CodeTemplateLibrary } from "@/lib/types";
+import { checkFileSize } from "@/lib/file-size-guard";
 import {
   parseCodeTemplatesFromXml,
   parseCodeTemplateLibrariesFromXml,
@@ -99,8 +100,15 @@ export function ImportCodeTemplateDialog({
 
   // Compute conflicts from current row state
   const conflicts = useMemo(
-    () => computeConflicts(rows, libraries, templates, mode),
-    [rows, libraries, templates, mode]
+    () =>
+      computeConflicts(
+        rows,
+        libraries,
+        templates,
+        mode,
+        mode === "template" ? targetLibraryId : undefined
+      ),
+    [rows, libraries, templates, mode, targetLibraryId]
   );
 
   const unresolvedConflicts = useMemo(() => hasUnresolvedConflicts(conflicts), [conflicts]);
@@ -108,8 +116,13 @@ export function ImportCodeTemplateDialog({
   // --- Step 1: Parse file and advance to review ---
   async function handleParseAndAdvance() {
     if (!file) return;
-    setLoading(true);
     setError(null);
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      setError(tooLarge);
+      return;
+    }
+    setLoading(true);
     try {
       const xml = await file.text();
 

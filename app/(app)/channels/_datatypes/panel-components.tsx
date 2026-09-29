@@ -178,18 +178,19 @@ export function ScriptEditorDialog({
   title,
   value,
   onSave,
-  isDark,
   channelId,
   contextType,
+  description,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   title: string;
   value: string;
   onSave: (v: string) => void;
-  isDark?: boolean;
   channelId?: string;
   contextType?: ContextType;
+  /** Dialog subtitle; defaults to the batch-script wording (the original use). */
+  description?: string;
 }) {
   const [draft, setDraft] = useState(value);
   const monacoRef = useRef<unknown>(null);
@@ -234,7 +235,7 @@ export function ScriptEditorDialog({
         <DialogHeader className="px-5 pt-4 pb-3 shrink-0 border-b border-border">
           <DialogTitle className="text-sm font-semibold">{title}</DialogTitle>
           <DialogDescription className="text-xs text-gray-500 dark:text-gray-400">
-            Edit the JavaScript batch script.
+            {description ?? "Edit the JavaScript batch script."}
           </DialogDescription>
         </DialogHeader>
         <div className="flex-1 min-h-0">
@@ -242,7 +243,6 @@ export function ScriptEditorDialog({
             language={RHINO_LANG_ID}
             value={draft}
             onChange={(v) => setDraft(v ?? "")}
-            theme={isDark ? "mirth-js-dark" : "mirth-js"}
             height="100%"
             beforeMount={handleBeforeMount}
             onMount={handleMount}

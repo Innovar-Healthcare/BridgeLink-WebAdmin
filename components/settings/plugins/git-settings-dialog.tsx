@@ -42,6 +42,8 @@ import {
   AUTH_TYPE_SSH,
   type GitAuthType,
 } from "@/plugins/version-history/api-version-history";
+import { toast } from "sonner";
+import { checkFileSize } from "@/lib/file-size-guard";
 
 /** Property keys needed for the validation API call. */
 const VALIDATE_KEYS = {
@@ -155,6 +157,12 @@ export function GitSettingsDialog({ open, onOpenChange, initial, onSave }: GitSe
   function handleLoadFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      toast.error(tooLarge);
+      e.target.value = "";
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === "string") {

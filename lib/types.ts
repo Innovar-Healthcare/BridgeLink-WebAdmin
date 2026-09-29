@@ -123,6 +123,64 @@ export interface DashboardStatus {
   queueEnabled?: boolean;
   queued?: number;
   childStatuses?: DashboardStatus[];
+  /**
+   * (BridgeLink 26.9+): when the channel entered its current state (ISO string after
+   * normalizeXStream) and whether it has been STOPPING or STARTING longer than the server's stop
+   * grace period. Absent on older servers and on connector-level statuses.
+   */
+  stateSince?: string;
+  lifecycleOverdue?: boolean;
+}
+
+/**
+ * One live thread of a channel, from GET /channels/{channelId}/_threads. Plain JSON
+ * from the server (not the XStream envelope), so no normalization applies. Stack frames only,
+ * never message content.
+ */
+export interface ChannelThreadInfo {
+  id: number;
+  name: string;
+  /** java.lang.Thread.State name: RUNNABLE, BLOCKED, WAITING, TIMED_WAITING, ... */
+  state: string;
+  daemon: boolean;
+  lockName: string | null;
+  lockOwnerName: string | null;
+  lockOwnerId: number | null;
+  /** The most recent stop or halt timed out waiting on this very thread. */
+  waitedOnByLifecycle: boolean;
+  /** A channel script whose execution was cancelled but whose thread is still running. */
+  cancelledScript: boolean;
+  /** A halt gave up waiting on this thread and marked the channel stopped anyway. */
+  abandoned: boolean;
+  stackTrace: string[];
+}
+
+/** What the channel's most recent stop or halt was waiting on when its grace period ran out. */
+export interface ChannelLifecycleTimeout {
+  phase: string;
+  /** Epoch milliseconds. */
+  timestamp: number;
+  threadId: number | null;
+  threadName: string | null;
+  threadState: string | null;
+  stackTrace: string[];
+  message: string;
+}
+
+/** Response of GET /channels/{channelId}/_threads (com.mirth.connect.model.ChannelThreadReport). */
+export interface ChannelThreadReport {
+  channelId: string;
+  channelName: string;
+  state: DeployedState;
+  /** Epoch milliseconds of the last state change. */
+  stateSince: number;
+  /** Zero means the stop waits without bound. */
+  stopGracePeriodMillis: number;
+  lifecycleOverdue: boolean;
+  lastTimeout: ChannelLifecycleTimeout | null;
+  /** Epoch milliseconds when the report was collected. */
+  collectedAt: number;
+  threads: ChannelThreadInfo[];
 }
 
 /**
@@ -276,6 +334,12 @@ export interface ServerSettings {
   // Channel
   clearGlobalMap?: boolean;
   queueBufferSize?: number;
+  /**
+   * Seconds a channel stop waits for its threads and connector hooks before failing and naming
+   * the stuck thread, BridgeLink 26.9+). Absent means the engine default (120); 0 means
+   * wait without bound. Older servers never send it.
+   */
+  channelStopGracePeriod?: number;
   defaultMetaDataColumns?: MetaDataColumn[];
   // SMTP
   smtpHost?: string;
@@ -691,8 +755,6 @@ export interface ResourceProperties {
    * Server field name is "directoryRecursion" (com.mirth.connect.plugins.directoryresource.DirectoryResourceProperties).
    */
   directoryRecursion?: boolean;
-  /** Populated server-side for InvalidResourceProperties entries. */
-  className?: string;
   /** XStream @version attribute (e.g. "4.6.0") — preserved for round-trip serialization. */
   "@version"?: string;
   /**
@@ -708,6 +770,26 @@ export interface ResourceProperties {
    * re-emitted on save. The server uses it to dispatch the resource to its plugin.
    */
   pluginPointName?: string;
+  /**
+   * The complete raw JSON entry as it arrived from GET /server/resources, captured on load
+   * and re-emitted on save with the UI-edited base fields overlaid. This is what lets a
+   * resource type the WebUI does not model (a future non-Directory plugin, or an orphaned
+   * InvalidResourceProperties) round-trip without its subtype fields being stripped — the
+   * modeled fields above drive the UI, `_raw` is the serialization source of truth.
+   * Absent on rows created in the WebUI (which carry only the modeled Directory fields).
+   * Round-trips faithfully except numeric-looking string fields, which Staxon autoPrimitive
+   * may still mangle on the JSON path class; true byte-exactness needs an XML GET/PUT).
+   */
+  _raw?: Record<string, unknown>;
+  /**
+   * True when the server returned this resource as com.mirth.connect.model.InvalidResourceProperties
+   * — an orphaned resource whose plugin/subclass could no longer be resolved (e.g. the extension was
+   * uninstalled). Detected by the FQN list-envelope key, not by any per-field marker. Such a resource
+   * carries its original definition inside `_raw.propertiesXml`; the server re-emits that XML verbatim
+   * on save (ResourcePropertiesConverter), so the WebUI renders it read-only to keep it byte-stable.
+   * Mirrors SettingsPanelResources' invalid-resource panel (SettingsPanelResources.java:540-555).
+   */
+  invalid?: boolean;
 }
 
 // ─── Code Templates ───────────────────────────────────────────────────────────

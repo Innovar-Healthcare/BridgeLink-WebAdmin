@@ -11,11 +11,11 @@
 
 import { useState, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, Eye } from "lucide-react";
 import { useVerticalSplitResize } from "@/lib/hooks/use-vertical-split-resize";
 import { formatContent } from "@/lib/format-content";
 import { MONACO_BASE_OPTIONS } from "@/lib/monaco-defaults";
-import { registerHl7v2Language, hl7v2Theme } from "@/lib/monaco-hl7v2";
+import { registerHl7v2Language } from "@/lib/monaco-hl7v2";
 import {
   Dialog,
   DialogContent,
@@ -23,14 +23,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ApiErrorAlert } from "@/components/api-error-alert";
 import { useTheme } from "@/lib/hooks/use-theme";
 import { pluginSlots } from "@/lib/plugin-slots";
 import { useSlotEnabled } from "@/lib/plugin-gating";
+import { usePermissions } from "@/lib/hooks/use-permissions";
+import { replaceTemplate, serverSupportsTemplateEndpoint } from "@/lib/api/api-template";
 import { defaultPropertiesXml, resolveXmlVersion } from "../../_lib/channel-xml";
 import { DATA_TYPE_REGISTRY } from "../../_datatypes/index";
 import { useVisibleDataTypes } from "../../_datatypes/use-visible-data-types";
+import { checkFileSize } from "@/lib/file-size-guard";
 
-const Editor = dynamic(() => import("@monaco-editor/react").then((m) => m.default), {
+const Editor = dynamic(() => import("@/components/monaco-editor").then((m) => m.MonacoEditor), {
   ssr: false,
   loading: () => (
     <div className="flex-1 bg-white dark:bg-gray-900 p-2 text-xs text-gray-400">
@@ -53,15 +57,11 @@ export function templateLanguage(dataType: string): string {
   }
 }
 
-/**
- * Theme for template editors. Monaco themes are global per instance, so all
- * template editors must use the same one — otherwise a non-HL7 editor's theme
- * clobbers HL7 highlighting in a sibling editor. The hl7v2 theme
- * inherits vs/vs-dark, so XML/JSON/plaintext render identically under it.
- */
-export function templateTheme(isDark: boolean): string {
-  return hl7v2Theme(isDark);
-}
+// There is deliberately no templateTheme() here any more. Monaco themes are
+// global per instance, so pinning template editors to their own theme only moved
+// the clobber around: it fixed (template vs template) and caused
+// (template vs the JavaScript step on the same page). The app now has a
+// single merged theme applied by <MonacoEditor> — see lib/monaco-theme.ts.
 
 // ─── Template Properties Dialog ───────────────────────────────────────────────
 // Shows serialization settings for the selected data type.
@@ -149,6 +149,52 @@ function TemplatePropertiesDialog({
   );
 }
 
+// ─── Template Preview Dialog ───────────────────────────────────────────────────
+// Resolves ${...} references via POST /server/_replaceTemplate.
+
+function TemplatePreviewDialog({
+  open,
+  onClose,
+  loading,
+  result,
+  error,
+}: {
+  open: boolean;
+  onClose: () => void;
+  loading: boolean;
+  result: string | null;
+  error: string | null;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-lg flex flex-col max-h-[calc(100vh-6rem)]">
+        <DialogHeader className="shrink-0">
+          <DialogTitle className="text-sm">Template Preview</DialogTitle>
+        </DialogHeader>
+        <div className="shrink min-h-0 overflow-y-auto">
+          {loading ? (
+            <p className="text-xs text-gray-500 dark:text-gray-400 p-3">Resolving…</p>
+          ) : error ? (
+            <ApiErrorAlert error={error} className="mx-3 mt-2" />
+          ) : (
+            <pre className="text-xs font-mono whitespace-pre-wrap break-all p-3 bg-gray-50 dark:bg-gray-900 rounded border border-border">
+              {result}
+            </pre>
+          )}
+        </div>
+        <DialogFooter className="gap-2 shrink-0">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-xs rounded border border-border hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
+          >
+            Close
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Template section ─────────────────────────────────────────────────────────
 
 function TemplateSection({
@@ -177,14 +223,29 @@ function TemplateSection({
   channelId?: string;
 }) {
   const [propsOpen, setPropsOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewResult, setPreviewResult] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const { isDark } = useTheme();
   const visibleTypes = useVisibleDataTypes();
+  // The server resolves ${...} against the Configuration Map, and access control
+  // gates that call under the same module, so a role denied the map is refused.
+  // Hide the button rather than offer a preview that can only fail. Allow-all
+  // when no access-control plugin is installed.
+  const { hasPermission } = usePermissions();
+  const canPreview =
+    serverSupportsTemplateEndpoint() && hasPermission("Settings.Configuration Map");
   // Plugin-filled per-pane actions. Member-expression read +
   // separate boolean gate — required by the React Compiler static-components
   // rule (same idiom as javascript-panel.tsx's editor.overlay).
   const TemplateActions = pluginSlots["message-template.actions"];
   const templateActionsEnabled = useSlotEnabled("message-template.actions");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Guards against an out-of-order response overwriting a newer preview
+  // (e.g. Preview clicked twice in quick succession with the second request
+  // resolving first) from showing a stale result.
+  const previewSeqRef = useRef(0);
   const [wrap, setWrap] = useState(() => {
     if (typeof window === "undefined") return false;
     return localStorage.getItem("bl-template-wordwrap") === "true";
@@ -214,6 +275,28 @@ function TemplateSection({
     fileInputRef.current?.click();
   }
 
+  /** Resolve ${...} references in the current template via the server. */
+  function handlePreview() {
+    const seq = ++previewSeqRef.current;
+    setPreviewOpen(true);
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewResult(null);
+    replaceTemplate(text, channelId)
+      .then((result) => {
+        if (previewSeqRef.current !== seq) return;
+        setPreviewResult(result);
+      })
+      .catch((e) => {
+        if (previewSeqRef.current !== seq) return;
+        setPreviewError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (previewSeqRef.current !== seq) return;
+        setPreviewLoading(false);
+      });
+  }
+
   /**
    * Read the selected file and set it as the template text.
    *
@@ -226,6 +309,12 @@ function TemplateSection({
     if (!file) return;
     // Reset so the same file can be re-picked next time
     e.target.value = "";
+
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      setPreviewError(tooLarge);
+      return;
+    }
 
     const plugin = DATA_TYPE_REGISTRY.get(dataType);
     const readBinary = !!plugin?.getTemplateString;
@@ -346,6 +435,21 @@ function TemplateSection({
         >
           Format
         </button>
+        {canPreview && (
+          <button
+            onClick={handlePreview}
+            disabled={!text.trim()}
+            className={
+              btnCls +
+              " flex items-center gap-1" +
+              (!text.trim() ? " opacity-50 cursor-not-allowed" : "")
+            }
+            title="Preview ${...} values resolved against this channel's live global variables (empty until the channel is first saved)"
+          >
+            <Eye className="w-3 h-3" />
+            Preview
+          </button>
+        )}
         {TemplateActions && templateActionsEnabled && (
           <TemplateActions side={side} dataType={dataType} text={text} setText={setText} />
         )}
@@ -361,7 +465,6 @@ function TemplateSection({
         <Editor
           value={text}
           language={templateLanguage(dataType)}
-          theme={templateTheme(isDark)}
           beforeMount={registerHl7v2Language}
           onChange={(v) => setText(v ?? "")}
           options={{
@@ -399,6 +502,15 @@ function TemplateSection({
         transformerType={transformerType}
         isDark={isDark}
         channelId={channelId}
+      />
+
+      {/* Template preview dialog */}
+      <TemplatePreviewDialog
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        loading={previewLoading}
+        result={previewResult}
+        error={previewError}
       />
     </div>
   );

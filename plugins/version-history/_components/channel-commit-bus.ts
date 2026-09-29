@@ -18,6 +18,7 @@
  */
 
 import { useEffect, useReducer } from "react";
+import { registerCacheTeardown } from "@/lib/logout";
 
 export interface PendingCommit {
   channelXml: string;
@@ -56,6 +57,29 @@ export function clearPendingChannelCommit(): void {
   _subs.forEach((cb) => cb());
   resolve?.();
 }
+
+/**
+ * Drop the pending commit on session teardown (login/logout/401).
+ *
+ * `_pending` holds the full channel XML plus the saving user's `userId`, and
+ * `usePendingChannelCommit()` reads the module variable on first render — so without
+ * this, an idle-logout while the commit dialog is open leaves user A's channel content
+ * sitting in memory, and the next user to open a channel editor gets A's commit dialog
+ * pre-filled, with a Commit button that would write to the version-history repo under
+ * A's user id.
+ *
+ * Deliberately neither notifies subscribers nor calls `resolve()`, unlike
+ * `clearPendingChannelCommit()`. Resolving would let the suspended
+ * `postChannelSaveHandler` continue into its deploy step against the session teardown
+ * just ended; that 401 hard-redirects to `/login?returnUrl=...` instead of the clean
+ * `/login` the logout paths produce. Leaving the save flow suspended on a page that is
+ * already navigating to /login is the cheaper of the two.
+ */
+function resetPendingChannelCommit(): void {
+  _pending = null;
+}
+
+registerCacheTeardown(resetPendingChannelCommit);
 
 /** Hook: subscribe to pending-commit signals and return the current value. */
 export function usePendingChannelCommit(): PendingCommit | null {

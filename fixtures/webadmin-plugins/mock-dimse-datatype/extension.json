@@ -1,0 +1,6 @@
+{
+  "name": "Mock DIMSE Data Type",
+  "path": "mock-dimse-datatype",
+  "version": "1.0.0",
+  "enabled": true
+}

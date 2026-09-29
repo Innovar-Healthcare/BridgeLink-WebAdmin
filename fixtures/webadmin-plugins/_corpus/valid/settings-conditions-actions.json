@@ -1,0 +1,51 @@
+{
+  "manifestVersion": 1,
+  "minWebAdminVersion": "26.0.0",
+  "settingsPanels": [
+    {
+      "tabKey": "corpus",
+      "tabLabel": "Corpus",
+      "sections": [
+        {
+          "title": "Options",
+          "fields": [
+            {
+              "key": "mode",
+              "type": "select",
+              "label": "Mode",
+              "options": [
+                { "value": "a", "label": "Simple" },
+                { "value": "b", "label": "Detailed" }
+              ],
+              "defaultValue": "a"
+            },
+            {
+              "key": "detail",
+              "type": "text",
+              "label": "Detail",
+              "visibleWhen": { "field": "mode", "op": "eq", "value": "b" },
+              "validation": [{ "rule": "required" }, { "rule": "pattern", "pattern": "^(a|b)+$" }]
+            },
+            {
+              "key": "count",
+              "type": "number",
+              "label": "Count",
+              "validation": [
+                { "rule": "min", "value": 0 },
+                { "rule": "max", "value": 10 }
+              ]
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "Test connection",
+          "endpoint": "/extensions/corpus-ext/test",
+          "method": "POST",
+          "confirm": "Run the test?"
+        }
+      ]
+    }
+  ]
+}

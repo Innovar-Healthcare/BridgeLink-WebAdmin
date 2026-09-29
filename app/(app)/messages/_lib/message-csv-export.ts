@@ -1,7 +1,11 @@
 import type { ColDef } from "@/lib/hooks/use-column-config";
 import type { ConnectorMessage, Message } from "@/lib/types";
 import type { MessageFilter } from "@/lib/api/api-messages";
-import { searchMessages } from "@/lib/api/api-messages";
+import {
+  searchMessages,
+  auditExportMessages,
+  auditExportMessagesSuccess,
+} from "@/lib/api/api-messages";
 import type { MsgCol } from "./message-columns";
 import { getCellValue } from "./message-columns";
 import { downloadCsv } from "@/lib/download";
@@ -36,6 +40,14 @@ export async function exportMessagesCsv(
   const toastId = toast.loading("Exporting... 0 rows fetched");
 
   try {
+    // Audit: record export intent before any data is fetched, mirroring the Export Results
+    // dialog's auditExportMessages call so a CSV pull leaves the same "Export all messages"
+    // server event as the full export wizard. The event name is set server-side; an empty
+    // attribute map matches the Java MessageExportDialog "initiated" call. Caller has already
+    // refused unless an explicit search has run (Java isChannelMessagesPanelFirstLoadSearch
+    // gate), so this only fires for a legitimate export.
+    await auditExportMessages({});
+
     let allMessages: Message[] = [];
     let offset = 0;
 
@@ -60,6 +72,25 @@ export async function exportMessagesCsv(
     const headers = visibleCols.map((c) => c.label);
     const rows = buildRows(visibleCols, allMessages);
     downloadCsv("bridgelink-messages", headers, rows);
+
+    // Audit: record the successful export using the same attribute schema as Export Results,
+    // so the server event log carries one consistent "Successfully exported messages" shape
+    // regardless of which export path was used. CSV is a WebUI-only quick export with no Java
+    // analog, so contentType is tagged "CSV" and the server-path/compression/encryption fields
+    // carry their not-applicable defaults. exportCount is the message count (not the CSV row
+    // count, which explodes each message into one row per connector) so the number is consistent
+    // with the Server/My Computer export events an auditor sees alongside it.
+    await auditExportMessagesSuccess({
+      rootPath: "",
+      filePattern: "bridgelink-messages-${currentDate}.csv",
+      exportCount: String(allMessages.length),
+      contentType: "CSV",
+      encrypted: "false",
+      includeAttachments: "false",
+      compressionFormat: "",
+      passwordProtected: "false",
+    });
+
     toast.success(`Exported ${rows.length} rows.`, { id: toastId });
   } catch (err) {
     toast.error(`Export failed: ${err instanceof Error ? err.message : String(err)}`, {

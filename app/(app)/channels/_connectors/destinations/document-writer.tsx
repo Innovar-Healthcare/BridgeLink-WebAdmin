@@ -106,7 +106,6 @@ function DocumentWriterBottomSection({
   channelId,
   channelName,
   invalidFields,
-  isDark,
 }: DestinationConnectorSectionProps) {
   const { viewDensity } = useCompactMode();
   const invalid = invalidFields ?? new Set<string>();
@@ -361,7 +360,6 @@ function DocumentWriterBottomSection({
               value={local.template}
               onChange={(v) => set("template", v ?? "")}
               onMount={handleMount}
-              theme={isDark ? "vs-dark" : "vs"}
               height="100%"
               options={{
                 ...MONACO_BASE_OPTIONS,

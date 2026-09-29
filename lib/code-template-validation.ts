@@ -1,5 +1,5 @@
 /**
- * Client-side JavaScript validation for code templates on save.
+ * JavaScript validation for code templates on save.
  *
  * Mirrors the Java client's CodeTemplatePanel.validateAll() (called from doSaveCodeTemplates),
  * which validates every template before persisting and aborts the save on the first error,
@@ -7,14 +7,18 @@
  * offending template — the explicit ask in ("identify which CTs contained the errors;
  * some may have errors, some may not") — instead of stopping at the first.
  *
- * The per-error phrasing ("Line X: message") matches the Validate action, so Save and Validate
- * report identically sub-issue #3). Uses the shared validator (findJsSyntaxError),
- * which parses E4X XML literals and neutralizes E4X operators so real errors are caught even in
- * E4X templates; residual forms it cannot represent are deferred, exactly like the real-time
- * editor markers.
+ * When the connected Core is new enough validation runs server-side with the real
+ * Rhino engine (one batch call for the changed template set); otherwise it falls back to the
+ * shared acorn validator (findJsSyntaxError), which parses E4X XML literals and neutralizes E4X
+ * operators so real errors are caught even in E4X templates, deferring forms it cannot represent.
+ * The per-error phrasing ("Line X: message") matches the Validate action either way #3).
  */
 
 import { findJsSyntaxError } from "@/lib/js-validation";
+import {
+  serverSupportsScriptValidation,
+  validateScriptsBatch,
+} from "@/lib/api/api-script-validation";
 import type { CodeTemplate, CodeTemplateLibrary } from "@/lib/types";
 
 export interface CodeTemplateJsError {
@@ -37,14 +41,38 @@ function libraryNameForTemplate(
 }
 
 /**
- * Run the validator over each template's code and return one entry per template that has a
- * syntax error. Residual E4X templates are deferred (findJsSyntaxError returns null). Returns an
- * empty array when every template parses cleanly.
+ * Validate each template's code and return one entry per template that has a syntax error —
+ * server-side when supported (one batch call), else via the acorn fallback (residual E4X
+ * templates deferred → no entry). Returns an empty array when every template parses cleanly.
  */
-export function findCodeTemplateJsErrors(
+export async function findCodeTemplateJsErrors(
   templates: CodeTemplate[],
   libraries: CodeTemplateLibrary[]
-): CodeTemplateJsError[] {
+): Promise<CodeTemplateJsError[]> {
+  if (serverSupportsScriptValidation()) {
+    const scripts: Record<string, string> = {};
+    for (const t of templates) scripts[t.id] = t.code;
+    const results = await validateScriptsBatch(scripts);
+    const errors: CodeTemplateJsError[] = [];
+    for (const t of templates) {
+      const r = results[t.id];
+      // Fail safe: an invalid result blocks the save even if the server omitted the error
+      // detail — never treat "invalid, no detail" as clean (mirrors scriptErrorMessage).
+      if (r && !r.valid) {
+        errors.push({
+          templateId: t.id,
+          templateName: t.name,
+          libraryName: libraryNameForTemplate(t.id, libraries),
+          line: r.error?.line ?? 0,
+          message: r.error?.message ?? "Template failed validation.",
+        });
+      }
+    }
+    return errors;
+  }
+
+  // TRANSITIONAL FALLBACK — client-side acorn path for Core older than the endpoint.
+  // Delete once MIN_SUPPORTED_SERVER_VERSION >= MIN_SERVER_VALIDATE_SCRIPTS.
   const errors: CodeTemplateJsError[] = [];
   for (const t of templates) {
     const err = findJsSyntaxError(t.code);
@@ -66,11 +94,11 @@ export function findCodeTemplateJsErrors(
  * the given templates parse cleanly. Callers pass the changed template set so a save is never
  * blocked by a pre-existing error in a template the user did not touch.
  */
-export function validateCodeTemplatesForSave(
+export async function validateCodeTemplatesForSave(
   templates: CodeTemplate[],
   libraries: CodeTemplateLibrary[]
-): string | null {
-  const errors = findCodeTemplateJsErrors(templates, libraries);
+): Promise<string | null> {
+  const errors = await findCodeTemplateJsErrors(templates, libraries);
   if (errors.length === 0) return null;
 
   const lines = errors.map((e) => {

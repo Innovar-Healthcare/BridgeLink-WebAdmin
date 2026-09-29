@@ -165,7 +165,6 @@ export function XMLPropertiesSection({
   onChange,
   side,
   transformerType,
-  isDark,
   channelId,
 }: DataTypePropertiesSectionProps) {
   const xml = propsXml ?? "";
@@ -322,7 +321,6 @@ export function XMLPropertiesSection({
             setBatchScript(v);
             update("batchProperties > batchScript", v);
           }}
-          isDark={isDark}
           channelId={channelId}
           contextType="CHANNEL_BATCH"
         />

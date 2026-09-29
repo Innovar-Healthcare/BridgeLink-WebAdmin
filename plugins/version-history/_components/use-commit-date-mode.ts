@@ -6,7 +6,7 @@ import { format, formatDistanceToNow } from "date-fns";
 /**
  * Shared "relative vs. exact" date preference for the Version History commit lists.
  *
- *: the revision lists default to vague relative times ("about 1 month
+ * the revision lists default to vague relative times ("about 1 month
  * ago"). This hook lets the user toggle to actual dates. The preference is
  * persisted to localStorage and broadcast across instances so every commit list
  * (Commits tab, channel history, entity history dialogs) stays in sync.

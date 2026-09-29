@@ -1,10 +1,15 @@
 import { CronExpressionParser } from "cron-parser";
+// From the leaf `poll-connector-xml`, NOT `channel-xml`. This module is generic enough
+// that a connector plugin could plausibly import it, and plugin definitions are reachable from the
+// plugin barrel that server route handlers import. `channel-xml` value-imports DATA_TYPE_REGISTRY and
+// therefore every client `.tsx` datatype module, so importing the defaults from there would put this
+// module one importer away from breaking `npm run build` again.
 import {
   DEFAULT_ADVANCED_POLLING,
   type AdvancedPollingSettings,
   type CronJob,
   type PollConnectorState,
-} from "@/app/(app)/channels/_lib/channel-xml";
+} from "@/app/(app)/channels/_lib/poll-connector-xml";
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 

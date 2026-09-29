@@ -79,14 +79,30 @@ export async function setExtensionEnabled(extensionName: string, enabled: boolea
 /**
  * POST /extensions/_uninstall
  * Mirrors Java's Frame.doUninstallExtension().
- * Body is a raw JSON string — the extension's path attribute (e.g. "/path/to/extension").
- * The server marks the extension for deletion on next restart.
+ *
+ * `extensionPath` has no `@QueryParam`/`@PathParam` on the server
+ * (`ExtensionServletInterface.uninstallExtension`) — it is bound as the raw request-body
+ * entity. The server's JAX-RS `String` message-body reader does NOT JSON-parse the body
+ * even though `application/json` is an accepted `@Consumes` type; it reads the bytes
+ * verbatim. `JSON.stringify(extensionPath)` therefore shipped the path WITH its
+ * surrounding quotes (e.g. `"imageviewer"`) baked into the extension name the server
+ * queues for deletion — a name no installed extension's path ever matches, so the
+ * uninstall silently no-ops. Confirmed empirically against the local dockerized instance
+ * (`extensions/uninstall` queue file received the literal quoted string; after a restart
+ * the target extension folder was untouched).
+ *
+ * Fix: send the raw path text as the body, unquoted — `request()` still defaults
+ * `Content-Type: application/json` (satisfies `@Consumes`), but the server now reads the
+ * exact folder name and queues it correctly. Confirmed via the same live round-trip: the
+ * `extensions/uninstall` file received the bare path, and after `docker restart` the
+ * target extension's folder was deleted from disk and absent from
+ * `GET /extensions/plugins/`.
  * Returns 204 No Content on success.
  */
 export async function uninstallExtension(extensionPath: string): Promise<void> {
   return request<void>("/extensions/_uninstall", {
     method: "POST",
-    body: JSON.stringify(extensionPath),
+    body: extensionPath,
   });
 }
 

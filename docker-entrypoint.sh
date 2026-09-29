@@ -35,9 +35,13 @@ else
     echo "  /app/LICENSE" >&2
     echo "  /app/SUPPLEMENTAL-TERMS.md" >&2
     echo "" >&2
+    echo "To read them without accepting:" >&2
+    echo "" >&2
+    echo "  docker run --rm --entrypoint cat innovarhealthcare/bridgelink-webadmin:<tag> /app/LICENSE /app/SUPPLEMENTAL-TERMS.md" >&2
+    echo "" >&2
     echo "To accept and start the container:" >&2
     echo "" >&2
-    echo "  docker run -e BL_ACCEPT_LICENSE=1 ... innovarhc/bridgelink-web-ui:latest" >&2
+    echo "  docker run -e BL_ACCEPT_LICENSE=1 ... innovarhealthcare/bridgelink-webadmin:<tag>" >&2
     echo "" >&2
     echo "  # or in docker-compose.yml:" >&2
     echo "  environment:" >&2

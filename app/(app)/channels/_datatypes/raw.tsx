@@ -30,7 +30,6 @@ function RawPropertiesSection({
   onChange,
   side,
   transformerType,
-  isDark,
   channelId,
   version,
 }: DataTypePropertiesSectionProps) {
@@ -112,7 +111,6 @@ function RawPropertiesSection({
             setBatchScript(v);
             update("batchProperties > batchScript", v);
           }}
-          isDark={isDark}
           channelId={channelId}
           contextType="CHANNEL_BATCH"
         />

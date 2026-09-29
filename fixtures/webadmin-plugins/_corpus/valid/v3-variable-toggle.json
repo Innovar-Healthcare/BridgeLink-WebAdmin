@@ -1,0 +1,30 @@
+{
+  "manifestVersion": 3,
+  "connectorPanels": [
+    {
+      "mode": "destination",
+      "transportName": "Corpus Toggle Sender",
+      "sections": [
+        {
+          "title": "Headers",
+          "fields": [
+            {
+              "key": "headers",
+              "type": "map",
+              "label": "Headers",
+              "keyLabel": "Header",
+              "valueLabel": "Value",
+              "variableToggle": {
+                "variableKey": "headersVariable",
+                "useVariableKey": "isUseHeadersVariable",
+                "tableLabel": "Use Table",
+                "variableLabel": "Use Map",
+                "variablePlaceholder": "Map variable name"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

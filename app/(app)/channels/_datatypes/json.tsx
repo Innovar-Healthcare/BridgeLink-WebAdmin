@@ -59,7 +59,6 @@ function JSONPropertiesSection({
   onChange,
   side,
   transformerType,
-  isDark,
   channelId,
 }: DataTypePropertiesSectionProps) {
   const xml = propsXml ?? "";
@@ -133,7 +132,6 @@ function JSONPropertiesSection({
             setBatchScript(v);
             update("batchProperties > batchScript", v);
           }}
-          isDark={isDark}
           channelId={channelId}
           contextType="CHANNEL_BATCH"
         />

@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 2,
+  "connectorPanels": [
+    {
+      "mode": "source",
+      "transportName": "Corpus V2 Reader",
+      "sections": [
+        { "title": "General", "fields": [{ "key": "host", "type": "text", "label": "Host" }] }
+      ]
+    }
+  ]
+}

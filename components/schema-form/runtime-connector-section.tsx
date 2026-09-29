@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Connector-panel binding for runtime plugin manifests.
+ * Connector-panel binding for runtime plugin manifests,.
  *
  * `createRuntimeConnectorSection(panel, entry)` builds the component the
  * loader registers as the declared connector's BottomSection. It satisfies
@@ -12,10 +12,12 @@
  * from and written to DIRECT CHILD ELEMENTS of the connector's raw
  * `<properties>` XML string, one surgical DOM edit per change, re-serializing
  * the whole document — sibling elements, attributes, and order the schema
- * does not model are preserved verbatim (lib/runtime-plugins/xml-field-binding.ts).
- * Writes go through `onChange({ propertiesXml })` on every change, exactly
- * like the hand-written connectors, so the XML tab, dirty tracking, and save
- * path stay in sync.
+ * does not model are preserved verbatim. Scalar fields (and a collection's
+ * variable-toggle companion elements) bind through xml-field-binding.ts;
+ * collection fields (map/multimap/stringList/table, v3) bind through
+ * xml-collection-binding.ts. Writes go through `onChange({ propertiesXml })`
+ * on every change, exactly like the hand-written connectors, so the XML tab,
+ * dirty tracking, and save path stay in sync.
  */
 
 import { useMemo } from "react";
@@ -25,38 +27,102 @@ import {
   readFieldValues,
   writeFieldValue,
 } from "@/lib/runtime-plugins/xml-field-binding";
-import type { ConnectorPanelContribution } from "@/lib/runtime-plugins/manifest-types";
+import {
+  readMapRows,
+  readMultimapRows,
+  readStringListItems,
+  readTableRows,
+  writeMapRows,
+  writeMultimapRows,
+  writeStringListItems,
+  writeTableRows,
+  type CollectionMapRow,
+  type CollectionTableRow,
+} from "@/lib/runtime-plugins/xml-collection-binding";
+import {
+  COLLECTION_FIELD_TYPES,
+  type ConnectorPanelContribution,
+  type FieldDescriptor,
+} from "@/lib/runtime-plugins/manifest-types";
 import { SchemaFormSection } from "./schema-form-section";
+import type { CollectionFieldValue } from "./schema-collection-field";
 
-/**
- * Structural subset of ConnectorSectionProps / DestinationConnectorSectionProps
- * — a component typed on this subset is assignable to both section contracts.
- */
+const COLLECTION_TYPES = new Set<string>(COLLECTION_FIELD_TYPES);
+
 export interface RuntimeConnectorSectionProps {
   propertiesXml: string | null;
-  // The update type is deliberately optional/nullable so this signature is a
-  // contravariant match for both hosts' `(updates: Partial<...State>) => void`
-  // onChange props; the component itself only ever sends a string.
   onChange: (updates: { propertiesXml?: string | null }) => void;
   invalidFields?: Set<string>;
 }
 
-// Returned as a FunctionComponent (not ComponentType): the class-component
-// half of ComponentType is covariant in props, which would reject this
-// narrower-props component; the function half is contravariant and accepts it
-// for both the source and destination section contracts.
 export function createRuntimeConnectorSection(
   panel: ConnectorPanelContribution,
   entry: { name: string }
 ): FunctionComponent<RuntimeConnectorSectionProps> {
-  const fieldKeys = panel.sections.flatMap((section) => section.fields.map((f) => f.key));
+  const allFields = panel.sections.flatMap((section) => section.fields);
+  const collectionFields = allFields.filter((f) => COLLECTION_TYPES.has(f.type));
+  const collectionByKey = new Map<string, FieldDescriptor>(collectionFields.map((f) => [f.key, f]));
+  // Scalar keys read into the value bag: every non-collection field plus each
+  // collection's variable-toggle companion elements (ordinary scalar elements).
+  const scalarKeys = [
+    ...allFields.filter((f) => !COLLECTION_TYPES.has(f.type)).map((f) => f.key),
+    ...collectionFields.flatMap((f) =>
+      f.variableToggle ? [f.variableToggle.variableKey, f.variableToggle.useVariableKey] : []
+    ),
+  ];
+
+  function readCollections(xml: string | null): Record<string, CollectionFieldValue> {
+    const out: Record<string, CollectionFieldValue> = {};
+    for (const f of collectionFields) {
+      const columns = (f.columns ?? []).map((c) => c.element);
+      switch (f.type) {
+        case "map":
+          out[f.key] = readMapRows(xml, f.key);
+          break;
+        case "multimap":
+          out[f.key] = readMultimapRows(xml, f.key);
+          break;
+        case "stringList":
+          out[f.key] = readStringListItems(xml, f.key);
+          break;
+        case "table":
+          out[f.key] = readTableRows(xml, f.key, columns);
+          break;
+      }
+    }
+    return out;
+  }
+
+  function writeCollection(xml: string, key: string, value: CollectionFieldValue): string {
+    const f = collectionByKey.get(key);
+    if (!f) return xml;
+    switch (f.type) {
+      case "map":
+        return writeMapRows(xml, key, value as CollectionMapRow[]);
+      case "multimap":
+        return writeMultimapRows(xml, key, value as CollectionMapRow[]);
+      case "stringList":
+        return writeStringListItems(xml, key, value as string[]);
+      case "table":
+        return writeTableRows(
+          xml,
+          key,
+          f.rowElement ?? "",
+          (f.columns ?? []).map((c) => c.element),
+          value as CollectionTableRow[]
+        );
+      default:
+        return xml;
+    }
+  }
 
   function RuntimeConnectorSection({
     propertiesXml,
     onChange,
     invalidFields,
   }: RuntimeConnectorSectionProps) {
-    const values = useMemo(() => readFieldValues(propertiesXml, fieldKeys), [propertiesXml]);
+    const values = useMemo(() => readFieldValues(propertiesXml, scalarKeys), [propertiesXml]);
+    const collectionValues = useMemo(() => readCollections(propertiesXml), [propertiesXml]);
     const unparseable = useMemo(
       () => propertiesXml !== null && parsePropertiesDoc(propertiesXml) === null,
       [propertiesXml]
@@ -83,6 +149,11 @@ export function createRuntimeConnectorSection(
           // a path.
           if (!propertiesXml) return;
           onChange({ propertiesXml: writeFieldValue(propertiesXml, key, value) });
+        }}
+        collectionValues={collectionValues}
+        onCollectionChange={(key, value) => {
+          if (!propertiesXml) return;
+          onChange({ propertiesXml: writeCollection(propertiesXml, key, value) });
         }}
         invalidFields={invalidFields}
         attribution={entry.name}

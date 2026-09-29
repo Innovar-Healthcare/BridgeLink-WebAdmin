@@ -43,13 +43,28 @@ export function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
+// Cells starting with these characters are interpreted as formulas by
+// Excel/Sheets/LibreOffice when a CSV is opened (OWASP CSV injection).
+const FORMULA_TRIGGER_CHARS = new Set(["=", "+", "-", "@", "\t", "\r"]);
+// A string that's purely a number (e.g. "-2", "3.14") isn't a formula — skip
+// neutralizing it so numeric delta columns stay real numbers in Excel.
+const NUMERIC_RE = /^[+-]?(\d+\.?\d*|\.\d+)$/;
+
+function neutralizeFormula(s: string): string {
+  if (s.length > 0 && FORMULA_TRIGGER_CHARS.has(s[0]) && !NUMERIC_RE.test(s)) {
+    return "'" + s;
+  }
+  return s;
+}
+
 /**
- * Escape a value for inclusion in a CSV cell (RFC 4180).
+ * Escape a value for inclusion in a CSV cell (RFC 4180), neutralizing
+ * spreadsheet formula injection per OWASP guidance.
  */
 export function csvEscape(value: string | number | null | undefined): string {
   if (value == null) return "";
-  const s = String(value);
-  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+  const s = neutralizeFormula(String(value));
+  if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
     return '"' + s.replace(/"/g, '""') + '"';
   }
   return s;

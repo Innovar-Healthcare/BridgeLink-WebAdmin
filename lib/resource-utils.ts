@@ -11,8 +11,11 @@ export const DEFAULT_RESOURCE_ID = "Default Resource";
 /**
  * Validate the resource list before save. Mirrors the Java checks:
  *  - resource names must be unique (SettingsPanelResources)
- *  - a non-default Directory resource's path must be non-blank and not "/" or "server-lib"
- *    (DirectoryResourcePropertiesPanel.checkProperties — both would shadow the server classpath root)
+ *  - every Directory resource's path — including the Default Resource — must be non-blank
+ *    and not "/" or "server-lib" (DirectoryResourcePropertiesPanel.checkProperties validates
+ *    the selected row regardless of whether it is the default; both would shadow the server
+ *    classpath root). The default's Directory field is editable in the Java client, so it is
+ *    validated here rather than locked read-only.
  *
  * Returns the first error message, or null when the list is valid.
  */
@@ -24,7 +27,10 @@ export function validateResources(resources: ResourceProperties[]): string | nul
     seen.add(name);
   }
   for (const r of resources) {
-    if (r.id === DEFAULT_RESOURCE_ID || r.type !== "Directory") continue;
+    // Orphaned (InvalidResourceProperties) rows carry no editable Directory path and round-trip
+    // verbatim — never fabricate a Directory-path error for them.
+    if (r.invalid) continue;
+    if (r.type !== "Directory") continue;
     const dir = r.directory?.trim() ?? "";
     if (!dir) return `Directory path is required for resource "${r.name}".`;
     if (dir === "/" || dir === "server-lib") return `Directory cannot be equal to "${dir}".`;

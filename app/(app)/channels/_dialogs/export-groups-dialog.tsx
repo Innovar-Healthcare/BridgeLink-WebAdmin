@@ -15,7 +15,11 @@ import { getSession } from "@/lib/auth";
 import { getChannelExportData, getChannelGroupsXml } from "@/lib/api-client";
 import { downloadBlob } from "@/lib/download";
 import type { Channel, ChannelGroup } from "@/lib/types";
-import { stripEmptyExportDataFields, escapeXml } from "../_lib/export-helpers";
+import {
+  stripEmptyExportDataFields,
+  escapeXml,
+  resolveExportLibrariesAutoAnswer,
+} from "../_lib/export-helpers";
 
 /** A channel enriched with dashboard status fields. */
 interface EnrichedChannel extends Channel {
@@ -124,9 +128,19 @@ export function ExportGroupsDialog({
             if (name) allLibNames.add(name);
           });
       });
-      setLibraryNames([...allLibNames]);
+      const names = [...allLibNames];
+      setLibraryNames(names);
       setProgress(100);
       setProgressLabel("");
+      // Auto-answer based on the admin pref when libraries are present, matching
+      // the single-channel export path — skip the confirm phase entirely.
+      if (names.length > 0) {
+        const autoAnswer = resolveExportLibrariesAutoAnswer();
+        if (autoAnswer !== null) {
+          doExport(autoAnswer).catch(fail);
+          return;
+        }
+      }
       setPhase("confirm");
     }
 

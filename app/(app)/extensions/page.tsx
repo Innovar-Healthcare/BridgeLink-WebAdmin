@@ -23,6 +23,7 @@
  */
 
 import { startTransition, useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { PageHeader } from "@/components/page-header";
 import { ApiErrorAlert } from "@/components/api-error-alert";
 import { DockableToolbar } from "@/components/dockable-toolbar";
@@ -42,12 +43,13 @@ import {
   type ExtensionKind,
   type ExtensionRow,
 } from "./_lib/extension-types";
-import { ExtensionTable } from "./_components/extension-table";
+import { ExtensionTable, pendingRemovalKey } from "./_components/extension-table";
 import { InfoModal, UninstallConfirmModal } from "./_components/extension-modals";
 import { ExtensionsActionPanel } from "./_components/extensions-action-panel";
 import { WebContributions } from "./_components/web-contributions";
 import { useCompactMode, pagePadding } from "@/lib/hooks/use-compact-mode";
 import { usePermissions } from "@/lib/hooks/use-permissions";
+import { checkFileSize } from "@/lib/file-size-guard";
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
@@ -65,6 +67,9 @@ export default function ExtensionsPage() {
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [restartRequired, setRestartRequired] = useState(false);
+  // Rows uninstalled this session but not yet gone from the server list (D-05,.
+  // Keyed by kind+name (pendingRemovalKey); cleared on load() so a Refresh resets it.
+  const [pendingRemoval, setPendingRemoval] = useState<Set<string>>(new Set());
 
   const [infoTarget, setInfoTarget] = useState<ExtensionRow | null>(null);
   const [uninstallTarget, setUninstallTarget] = useState<ExtensionRow | null>(null);
@@ -84,6 +89,7 @@ export default function ExtensionsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setPendingRemoval(new Set());
     try {
       const [connMap, plugMap] = await Promise.all([getConnectorMetaData(), getPluginMetaData()]);
 
@@ -155,8 +161,15 @@ export default function ExtensionsPage() {
 
   async function handleInstall() {
     if (!installFile) return;
-    setInstalling(true);
     setError(null);
+    // The server opens this archive, not the browser — but fail fast rather than
+    // spend an upload on a file Core will refuse anyway.
+    const tooLarge = checkFileSize(installFile);
+    if (tooLarge) {
+      setError(tooLarge);
+      return;
+    }
+    setInstalling(true);
     try {
       await installExtension(installFile);
       setRestartRequired(true);
@@ -193,6 +206,7 @@ export default function ExtensionsPage() {
     try {
       await uninstallExtension(row.path);
       setRestartRequired(true);
+      setPendingRemoval((prev) => new Set(prev).add(pendingRemovalKey(row.kind, row.name)));
       toast.success(
         `"${row.name}" has been queued for uninstallation. Restart the server to complete removal.`
       );
@@ -203,6 +217,7 @@ export default function ExtensionsPage() {
       }
       // Java (Frame.doUninstallExtension) only sets the restart banner; the row stays visible
       // (pending restart) and the tables are not re-fetched. Use the toolbar Refresh to reload.
+      // D-05: mark it pending removal so the "successful" uninstall doesn't look like a no-op.
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -225,7 +240,17 @@ export default function ExtensionsPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <PageHeader title="Extensions" />
+      <PageHeader
+        title="Extensions"
+        actions={
+          <Link
+            href="/developer/manifest-preview"
+            className="text-sm text-blue-600 hover:underline dark:text-blue-400"
+          >
+            Manifest Preview
+          </Link>
+        }
+      />
 
       {/* Toolbar + Content */}
       <div
@@ -268,6 +293,7 @@ export default function ExtensionsPage() {
               onContextUninstall={(row) => setUninstallTarget(row)}
               viewOnly={extensionsViewOnly}
               loading={loading}
+              pendingRemoval={pendingRemoval}
             />
 
             <ExtensionTable
@@ -282,6 +308,7 @@ export default function ExtensionsPage() {
               onContextUninstall={(row) => setUninstallTarget(row)}
               viewOnly={extensionsViewOnly}
               loading={loading}
+              pendingRemoval={pendingRemoval}
             />
 
             {/* ── Web contributions from runtime plugin manifests ── */}

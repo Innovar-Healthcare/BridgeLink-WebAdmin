@@ -26,6 +26,7 @@ import {
 } from "@/app/(app)/channels/_lib/channel-import-xml";
 import { applyImportedChannelDependencies } from "@/app/(app)/channels/_lib/apply-imported-dependencies";
 import { loadAdminPrefs } from "@/components/settings/admin-tab";
+import { checkFileSize } from "@/lib/file-size-guard";
 
 type Step =
   | "file-select"
@@ -108,6 +109,11 @@ export function ImportChannelDialog({
   async function handleFileSelected() {
     if (!file) return;
     setError(null);
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      setError(tooLarge);
+      return;
+    }
     setLoading(true);
     try {
       const xml = await file.text();

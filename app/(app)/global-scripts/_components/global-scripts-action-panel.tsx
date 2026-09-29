@@ -8,6 +8,7 @@ interface GlobalScriptsActionPanelProps {
   position: ToolbarPosition;
   loading: boolean;
   saving: boolean;
+  validating: boolean;
   anyDirty: boolean;
   hasScripts: boolean;
   onRefresh: () => void;
@@ -23,6 +24,7 @@ export function GlobalScriptsActionPanel({
   position,
   loading,
   saving,
+  validating,
   anyDirty,
   hasScripts,
   onRefresh,
@@ -92,9 +94,9 @@ export function GlobalScriptsActionPanel({
       <AdaptiveBtn
         orientation={orientation}
         onClick={onValidate}
-        disabled={loading || !hasScripts}
-        icon={<CheckCircle className="w-4 h-4" />}
-        label="Validate"
+        disabled={loading || validating || !hasScripts}
+        icon={<CheckCircle className={`w-4 h-4 ${validating ? "animate-pulse" : ""}`} />}
+        label={validating ? "Validating…" : "Validate"}
         title="Validate active script for syntax errors"
       />
       <AdaptiveSeparator orientation={orientation} />

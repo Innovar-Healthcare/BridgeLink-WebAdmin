@@ -8,6 +8,11 @@
  *  - Name conflict: imported item shares a name (case-insensitive) with an
  *    existing item that will NOT be overwritten → error. User must rename
  *    or enable overwrite.
+ *
+ * Library names are unique server-wide, but template names only need to be
+ * unique within one library: a template is compared against the existing and
+ * imported templates of the library it will land in, never against other
+ * libraries (Java EffectiveNames keys both template-name maps by library id).
  */
 
 import type { CodeTemplate, CodeTemplateLibrary } from "@/lib/types";
@@ -110,15 +115,22 @@ export function buildImportRows(
  * and name state.  Returns a Map keyed by the row's `id`.
  *
  * The caller should invoke this inside a `useMemo` so it recomputes whenever
- * `rows`, `existingLibraries`, or `existingTemplates` change.
+ * `rows`, `existingLibraries`, `existingTemplates`, or `targetLibraryId` change.
  */
 export function computeConflicts(
   rows: ImportRow[],
   existingLibraries: CodeTemplateLibrary[],
   existingTemplates: Map<string, CodeTemplate>,
-  mode: "library" | "template" = "library"
+  mode: "library" | "template" = "library",
+  /** In template mode: the library the templates will be added to. */
+  targetLibraryId?: string
 ): Map<string, ConflictInfo> {
   const result = new Map<string, ConflictInfo>();
+
+  // The library a template row will land in: its parent in the import tree,
+  // or the chosen target library in template mode.
+  const rowLibraryKey = (row: ImportRow): string =>
+    (mode === "template" ? targetLibraryId : row.parentLibraryId) ?? "";
 
   // Build lookup maps for existing items
   const existingLibById = new Map<string, CodeTemplateLibrary>();
@@ -128,10 +140,19 @@ export function computeConflicts(
     existingLibByName.set(lib.name.toLowerCase(), lib);
   }
 
-  const existingTmplByName = new Map<string, CodeTemplate>(); // lowercase name → template
-  for (const [, tmpl] of existingTemplates) {
-    existingTmplByName.set(tmpl.name.toLowerCase(), tmpl);
+  // library id → lowercase name → template. Templates that belong to no
+  // library are ignored, as in Java.
+  const existingTmplNamesByLib = new Map<string, Map<string, CodeTemplate>>();
+  for (const lib of existingLibraries) {
+    const byName = new Map<string, CodeTemplate>();
+    for (const tid of lib.codeTemplateIds) {
+      const tmpl = existingTemplates.get(tid);
+      if (tmpl) byName.set(tmpl.name.toLowerCase(), tmpl);
+    }
+    existingTmplNamesByLib.set(lib.id, byName);
   }
+  const findExistingTmplByName = (row: ImportRow, lowerName: string): CodeTemplate | undefined =>
+    existingTmplNamesByLib.get(rowLibraryKey(row))?.get(lowerName);
 
   // Track IDs that will be overwritten (so their names don't count as conflicts)
   const overwrittenIds = new Set<string>();
@@ -142,16 +163,21 @@ export function computeConflicts(
   }
 
   // Track names among selected import rows for inter-import duplicate detection
-  // (two imported items with the same name that are both selected)
-  const selectedImportLibNames = new Map<string, string[]>(); // lowercase name → [ids]
+  // (two imported items with the same name that are both selected). Library
+  // keys are the lowercase name; template keys are scoped to the row's library.
+  const importNameKey = (row: ImportRow): string =>
+    row.kind === "library"
+      ? row.name.toLowerCase()
+      : `${rowLibraryKey(row)}\u0000${row.name.toLowerCase()}`;
+  const selectedImportLibNames = new Map<string, string[]>(); // key → [ids]
   const selectedImportTmplNames = new Map<string, string[]>();
   for (const row of rows) {
     if (!row.selected) continue;
-    const lowerName = row.name.toLowerCase();
+    const key = importNameKey(row);
     const map = row.kind === "library" ? selectedImportLibNames : selectedImportTmplNames;
-    const list = map.get(lowerName) ?? [];
+    const list = map.get(key) ?? [];
     list.push(row.id);
-    map.set(lowerName, list);
+    map.set(key, list);
   }
 
   for (const row of rows) {
@@ -229,21 +255,21 @@ export function computeConflicts(
       const idMatch = existingTemplates.get(row.id);
       if (idMatch) {
         if (!row.overwrite) {
-          const nameMatch = existingTmplByName.get(lowerName);
+          const nameMatch = findExistingTmplByName(row, lowerName);
           if (nameMatch && nameMatch.id !== row.id && !overwrittenIds.has(nameMatch.id)) {
             result.set(row.id, {
               type: "name-conflict",
               matchedId: nameMatch.id,
-              message: `A template named "${nameMatch.name}" already exists. Rename or select overwrite.`,
+              message: `A template named "${nameMatch.name}" already exists in this library. Rename or select overwrite.`,
             });
             continue;
           }
-          const sameNameIds = selectedImportTmplNames.get(lowerName) ?? [];
+          const sameNameIds = selectedImportTmplNames.get(importNameKey(row)) ?? [];
           if (sameNameIds.length > 1) {
             result.set(row.id, {
               type: "name-conflict",
               matchedId: null,
-              message: "Another imported template has the same name.",
+              message: "Another imported template in this library has the same name.",
             });
             continue;
           }
@@ -258,22 +284,22 @@ export function computeConflicts(
         continue;
       }
 
-      const nameMatch = existingTmplByName.get(lowerName);
+      const nameMatch = findExistingTmplByName(row, lowerName);
       if (nameMatch && !overwrittenIds.has(nameMatch.id)) {
         result.set(row.id, {
           type: "name-conflict",
           matchedId: nameMatch.id,
-          message: `A template named "${nameMatch.name}" already exists. Rename to resolve.`,
+          message: `A template named "${nameMatch.name}" already exists in this library. Rename to resolve.`,
         });
         continue;
       }
 
-      const sameNameIds = selectedImportTmplNames.get(lowerName) ?? [];
+      const sameNameIds = selectedImportTmplNames.get(importNameKey(row)) ?? [];
       if (sameNameIds.length > 1) {
         result.set(row.id, {
           type: "name-conflict",
           matchedId: null,
-          message: "Another imported template has the same name.",
+          message: "Another imported template in this library has the same name.",
         });
         continue;
       }

@@ -32,7 +32,7 @@
  *      registers it at startup.
  */
 
-import { connectContributionSink } from "@/lib/plugin-manifest";
+import { connectContributionSink, warnDuplicateContribution } from "@/lib/plugin-manifest";
 import type { ConnectorPluginDefinition } from "../types";
 
 import { HttpAuthPlugin } from "./http-auth";
@@ -50,9 +50,25 @@ export function registerSourcePlugin(plugin: ConnectorPluginDefinition): void {
   PLUGIN_REGISTRY = [...PLUGIN_REGISTRY, plugin];
 }
 
+// One claim per owned <pluginProperties> element (first-wins): two sections
+// binding the same FQN element — possible across two different extensions'
+// runtime manifests — would silently overwrite each other's XML. Compiled-in
+// sections omit ownedElementClass and are unaffected (runtime manifests can't
+// claim their elements either — the validator denylists them).
+const claimedElementClasses = new Set<string>();
+
 // Receive definePlugin() manifest contributions. Sections have no natural
-// registry key — duplicate protection is the manifest's plugin-id guard.
-connectContributionSink("sourceConnectorPlugins", (plugin) => {
+// registry key — duplicate protection is the manifest's plugin-id guard plus
+// the owned-element claim above.
+connectContributionSink("sourceConnectorPlugins", (plugin, pluginId) => {
+  const owned = plugin.ownedElementClass;
+  if (owned) {
+    if (claimedElementClasses.has(owned)) {
+      warnDuplicateContribution(pluginId, "sourceConnectorPlugin", owned);
+      return false;
+    }
+    claimedElementClasses.add(owned);
+  }
   registerSourcePlugin(plugin);
   return true;
 });

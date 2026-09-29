@@ -23,22 +23,39 @@ both:
 
 ---
 
-## How plugins work, in one minute
+## Two ways to build a plugin
 
-A plugin is **TypeScript/React source** in its own directory that **registers
+- **Declarative plugins** describe their UI in a JSON file (`webadmin.json`) that ships
+  inside your BridgeLink engine extension. The Web Administrator draws the screens with
+  its own components. **No plugin code runs in the browser, and there is no Web
+  Administrator rebuild or redistribution.** Install the extension on a running server and
+  the UI appears. This fits properties editors: connector panels, settings tabs, data
+  types, transmission modes, connector sections, and transformer steps. Start with
+  [DECLARATIVE-PLUGINS.md](./DECLARATIVE-PLUGINS.md).
+- **Compiled-in plugins** are TypeScript/React source built into the Web Administrator.
+  Use them when you need custom rendering beyond a form: full pages, bespoke tables, login
+  sections, access-control rules. The rest of these guides cover this path.
+
+If your UI is a form over your extension's properties, build a declarative plugin.
+
+---
+
+## How compiled-in plugins work, in one minute
+
+A compiled-in plugin is **TypeScript/React source** in its own directory that **registers
 itself** into the application's extension points at startup. The core app never
 references your plugin by name — it just reads from the registries your plugin
 fills in.
 
 The one constraint that shapes everything else:
 
-> **Web Administrator plugins compile into the application at build time. There is no
-> runtime install.** A plugin must be present in the source tree when the
-> application is built. You cannot drop a plugin archive onto a running server
-> the way you can with a server-side Java extension.
+> **Compiled-in plugins build into the application. There is no runtime install.** A
+> compiled-in plugin must be present in the source tree when the application is built.
+> You cannot drop it onto a running server the way you can with a server-side Java
+> extension (or a declarative plugin).
 
-This is why the canonical way to ship a plugin to customers is to have Innovar
-**include it in the standard distribution**. A plugin that's present in the build
+This is why the canonical way to ship a compiled-in plugin to customers is to have
+Innovar **include it in the standard distribution**. A plugin that's present in the build
 but not licensed stays dormant and invisible, so one distribution can safely
 carry every approved plugin. Activation is controlled by the server: the Web Administrator
 asks the server which plugins are entitled, and only those light up.
@@ -48,27 +65,13 @@ service) that _is_ installed at runtime on the BridgeLink server. The two halves
 talk only over BridgeLink's REST API. A **UI-only plugin** has no server half at
 all.
 
-> **On the roadmap — declarative runtime plugins (no client code).** The
-> build-time constraint above applies to today's TypeScript/React plugins. A
-> declarative runtime model is in active development that removes it for the most
-> common case. A plugin ships a small JSON manifest (`webadmin.json`) _inside its
-> own extension package_, and the Web Administrator renders it with its own
-> built-in components — **no plugin code runs in the browser, and no Web
-> Administrator rebuild or redistribution is required.** The manifest describes
-> connector and settings panels — fields, layout, show/enable-when logic, and
-> validation — declaratively, so a properties-editor plugin will install on a
-> running instance the same way a server-side extension does today. The
-> compiled-in path documented in these guides remains fully supported for UI that
-> needs custom rendering beyond a form. Packaging, review, and licensing details
-> for third-party declarative contributions will be published alongside the
-> feature.
-
 ---
 
 ## What you can build
 
-A plugin can register into any of these extension points (full details and code
-in [ARCHITECTURE.md](./ARCHITECTURE.md)):
+A compiled-in plugin can register into any of these extension points (full details
+and code in [ARCHITECTURE.md](./ARCHITECTURE.md)). The channel editor and message format
+surfaces that are properties forms can also be built declaratively:
 
 | Surface             | Examples                                                           |
 | ------------------- | ------------------------------------------------------------------ |
@@ -81,7 +84,7 @@ in [ARCHITECTURE.md](./ARCHITECTURE.md)):
 
 ---
 
-## The lifecycle at a glance
+## The compiled-in lifecycle at a glance
 
 ```
    Develop                Verify                 Ship
@@ -93,12 +96,20 @@ in [ARCHITECTURE.md](./ARCHITECTURE.md)):
    (and Java half)         removed                    license → your build
 ```
 
-Both paths run through Innovar — the partner path for review and inclusion, the
-in-house path for source review and BSL authorization.
+Both compiled-in paths run through Innovar — the partner path for review and
+inclusion, the in-house path for source review and BSL authorization. Declarative
+plugins do not: you ship them in your own extension package (see the licensing section of
+[DECLARATIVE-PLUGINS.md](./DECLARATIVE-PLUGINS.md#licensing)).
 
 ---
 
 ## Where to go next
+
+**Building a declarative plugin:** read
+[DECLARATIVE-PLUGINS.md](./DECLARATIVE-PLUGINS.md), then
+[DECLARATIVE-REFERENCE.md](./DECLARATIVE-REFERENCE.md) for the full grammar.
+
+**Building a compiled-in plugin:**
 
 1. **[QUICKSTART.md](./QUICKSTART.md)** — get the reference template running
    locally in a few minutes.

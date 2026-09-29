@@ -15,6 +15,7 @@ import { updateAlertFromXml } from "@/lib/api-client";
 import { generateUUID } from "@/lib/utils";
 import type { AlertStatus } from "@/lib/types";
 import { useCompactMode } from "@/lib/hooks/use-compact-mode";
+import { checkFileSize } from "@/lib/file-size-guard";
 import {
   type ParsedAlert,
   parseAlertXml,
@@ -89,8 +90,13 @@ export function ImportAlertDialog({
 
   async function handleFileSelected() {
     if (!file) return;
-    setLoading(true);
     setError(null);
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      setError(tooLarge);
+      return;
+    }
+    setLoading(true);
 
     try {
       const rawXml = await file.text();

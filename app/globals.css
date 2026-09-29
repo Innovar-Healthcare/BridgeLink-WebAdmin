@@ -8,6 +8,61 @@
    classes that must appear in the production CSS bundle. */
 @source "../plugins";
 
+/* Programming fonts for the code editors.
+
+   The "Code Editor Preferences > Font" setting named these families for a long
+   time without ever shipping them — every stack fell through to Menlo/Consolas,
+   so all the choices rendered identically unless the user happened to have the
+   face installed locally.
+
+   Cascadia Code is deliberately absent: it is OFL 1.1 *with Reserved Font Name*
+   "Cascadia Code", and OFL treats a webfont subset as a Modified Version, which
+   may not carry the reserved name. Its drop-down option was removed rather than
+   shipped (see the migration in lib/admin-prefs.ts). JetBrains Mono and Fira Code
+   declare no reserved name, so subsetting them is unconditionally fine.
+
+   The woff2 files are vendored from @fontsource into /public/fonts/ by
+   scripts/copy-fonts.mjs on each predev/prebuild (gitignored, same treatment as
+   /public/monaco/). The family names below must stay in lockstep with
+   EDITOR_FONT_OPTIONS in components/settings/admin-tab.tsx, which stores the
+   literal CSS stack in localStorage.
+
+   These are deliberately NOT declared via next/font: it generates a hashed family
+   name reachable only through a CSS variable, which would strand every already
+   persisted `editorFontFamily` value. Declaring the true family names keeps the
+   stored stacks — and the drop-down's per-option preview — working untouched.
+
+   No preload: a browser fetches a @font-face only when a glyph actually needs it,
+   so these cost nothing on the dashboard and load when an editor first renders.
+   That late arrival is why components/monaco-editor.tsx calls remeasureFonts(). */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("/fonts/jetbrains-mono/jetbrains-mono-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url("/fonts/jetbrains-mono/jetbrains-mono-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Fira Code";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("/fonts/fira-code/fira-code-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Fira Code";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 700;
+  src: url("/fonts/fira-code/fira-code-latin-700-normal.woff2") format("woff2");
+}
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -81,6 +136,10 @@
   --brand-header-border: #c8c8ce;
   --brand-title: #1b3d6d;
   --row-stripe: oklch(0.955 0 0);
+  --bl-eol-marker: #565e6b;
+  --bl-eol-marker-bg: rgba(0, 0, 0, 0.07);
+  --bl-search-hit-bg: rgba(250, 204, 21, 0.32);
+  --bl-search-flash-bg: rgba(59, 130, 246, 0.22);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -119,6 +178,10 @@
   --brand-header-border: oklch(1 0 0 / 18%);
   --brand-title: oklch(0.85 0.05 250);
   --row-stripe: oklch(0.19 0 0);
+  --bl-eol-marker: #9aa3ad;
+  --bl-eol-marker-bg: rgba(255, 255, 255, 0.11);
+  --bl-search-hit-bg: rgba(161, 98, 7, 0.45);
+  --bl-search-flash-bg: rgba(96, 165, 250, 0.24);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -243,4 +306,88 @@
   pointer-events: none;
   user-select: none;
   opacity: 0.85;
+}
+
+/*
+ * end-of-line markers injected by the message content viewer's
+ * "Show Line Endings" toggle (mirrors the Java client's ShowLineEndingsAction),
+ * rendered via Monaco injected-text decorations.
+ *
+ * Monaco appends its own token class to the same span (e.g. "mtk1
+ * bl-eol-marker"), and injects its theme CSS into <head> at runtime — after
+ * this stylesheet. A bare `.bl-eol-marker` rule ties Monaco's `.mtkN` on
+ * specificity and loses on source order, so the marker rendered in the
+ * data's color instead of muted gray. The `.monaco-editor` prefix bumps
+ * specificity to beat `.mtkN` without `!important`.
+ *
+ * Plain gray also isn't enough on its own: the HL7 theme already uses a
+ * muted gray for `|` (hl7-pipe, lib/monaco-hl7v2.ts), so a marker gray
+ * subtle enough to read as metadata reads as nearly the same ink as the
+ * pipe separator. The background chip separates the marker by shape
+ * instead of hue, so it stays legible (Java paints EOL markers with the
+ * whitespace/invisibles token color, not a syntax color — this is the
+ * WebUI's equivalent treatment).
+ */
+.monaco-editor .bl-eol-marker {
+  color: var(--bl-eol-marker);
+  background: var(--bl-eol-marker-bg);
+  border-radius: 3px;
+  padding: 0 3px;
+  margin-left: 3px;
+}
+
+/*
+ * the line a Config Search result deep-linked to, flashed once when
+ * the editor opens so the eye lands on it, then faded out.
+ *
+ * A whole-line *background*, never a color: Monaco appends its own `.mtkN`
+ * token class to the spans inside the line, so a color here would fight the
+ * syntax theme exactly as the EOL marker above documents. A background sits on
+ * the line decoration element instead and cannot collide.
+ *
+ * The fade is a one-shot CSS animation rather than a JS timer, so nothing has
+ * to own clearing it if the panel unmounts mid-flash. The decoration itself is
+ * still disposed by the editor, and javascript-panel.tsx clears it on first
+ * edit; this only governs how it looks while it lives.
+ */
+.monaco-editor .bl-search-hit-line {
+  background: var(--bl-search-hit-bg);
+  animation: bl-search-hit-fade 2.5s ease-out forwards;
+}
+
+@keyframes bl-search-hit-fade {
+  0%,
+  55% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/*
+ * the Config Search result row you last opened, flashed once when you
+ * come back to the results so you can see where you were. Ends fully
+ * transparent, so the class can stay on the element with no lasting effect and
+ * no timer or state to clear.
+ */
+.bl-search-flash {
+  animation: bl-search-flash-fade 2s ease-out forwards;
+}
+
+@keyframes bl-search-flash-fade {
+  0%,
+  40% {
+    background-color: var(--bl-search-flash-bg);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .monaco-editor .bl-search-hit-line,
+  .bl-search-flash {
+    animation: none;
+  }
 }

@@ -4,7 +4,7 @@
  * Shared Rhino JS language registration for Monaco.
  *
  * Registers the custom "rhino-js" language ID, a BridgeLink-colored Monarch tokenizer,
- * "mirth-js" / "mirth-js-dark" themes, and six providers:
+ * and six providers:
  *   1. Top-level BridgeLink globals (msg, channelMap, DateUtil, logger, HL7 segments…)
  *   2. Dot-triggered member completions (DateUtil. → getCurrentDate, logger. → info…)
  *   3. JS snippet completions (if, for, while, try/catch, function, switch, …)
@@ -13,14 +13,16 @@
  *   6. User-defined code templates filtered by ContextType and channel assignment
  *   7. Hover documentation for BridgeLink globals, member completions, and code templates
  *
+ * The colors for the tokens this emits live in lib/monaco-theme.ts, which is the
+ * app's single global theme — do not define a theme here.
+ *
  * Usage:
  *   import { RHINO_LANG_ID, registerRhinoLanguage } from "@/lib/monaco-rhino";
  *
- *   // In a Monaco <Editor> beforeMount callback:
- *   <Editor
+ *   // In a MonacoEditor beforeMount callback (the wrapper supplies the theme):
+ *   <MonacoEditor
  *     language={RHINO_LANG_ID}
  *     beforeMount={(monaco) => registerRhinoLanguage(monaco)}
- *     theme={isDark ? "mirth-js-dark" : "mirth-js"}
  *     ...
  *   />
  *
@@ -42,8 +44,10 @@ import {
   formatCodeTemplateSignature,
   extractFunctionCall,
 } from "./code-template-utils";
+import { prettyPrintScript, serverSupportsPrettyPrint } from "./api/api-misc-util";
 import type { ContextType } from "./types";
-import { CATEGORIES, SCRIPT_ONLY_CONTEXTS } from "./reference-data";
+import { SCRIPT_ONLY_CONTEXTS } from "./reference-data";
+import { getScriptReferenceCatalog } from "./script-references-catalog";
 import { pluginRegistry } from "./plugin-registry";
 import { ensureInstalledPluginsLoaded } from "./installed-plugins";
 import { ensurePluginLicensesLoaded } from "./plugin-license";
@@ -2425,10 +2429,23 @@ export function buildRhinoMonarchLanguage(): MonacoType.languages.IMonarchLangua
         [/\*\//, "comment", "@pop"],
         [/[\/*]/, "comment"],
       ],
+      // JSDoc blocks are colored distinctly from ordinary comments, matching the
+      // Java client's RSyntaxTextArea defaults: the body is dark red
+      // (COMMENT_DOCUMENTATION), @tags are orange (COMMENT_KEYWORD), and embedded
+      // HTML/URLs are gray (COMMENT_MARKUP). Rules are word-granular on purpose —
+      // a bulk rule that ran to the next `/` or `*` would swallow a tag or URL
+      // before its rule could match at the word start.
       jsdoc: [
-        [/[^\/*]+/, "comment.doc"],
         [/\*\//, "comment.doc", "@pop"],
-        [/[\/*]/, "comment.doc"],
+        [/@[a-zA-Z][\w-]*/, "comment.doc.tag"],
+        // A plain \S+ tail would swallow a `*/` that abuts the URL, so the block
+        // would never close and the rest of the file would color as documentation.
+        [/(?:https?|ftp):\/\/(?:[^\s*]|\*(?!\/))+/, "comment.doc.markup"],
+        [/<\/?[a-zA-Z][\w:.-]*\s*\/?>/, "comment.doc.markup"],
+        [/[^\s*\/@<]+/, "comment.doc"],
+        [/\s+/, "comment.doc"],
+        // Catch-all so no character falls through to defaultToken "invalid".
+        [/[*\/@<]/, "comment.doc"],
       ],
       regexp: [
         [
@@ -2640,54 +2657,10 @@ export function registerRhinoLanguage(monaco: typeof MonacoType) {
 
   monaco.languages.setMonarchTokensProvider(LANG_ID, buildRhinoMonarchLanguage());
 
-  // Theme — VS light base with colors matching the Java UI (MirthJavaScriptTokenMaker):
-  //   Blue   (#0000FF) — context vars, maps, shorthand helpers  (MARKUP_TAG_NAME)
-  //   Purple (#7B2D8B) — utility classes, logger, HL7 segments  (LITERAL_BOOLEAN)
-  //   Brown  (#7B5000) — helper functions                        (FUNCTION)
-  // tokenPostfix ".js" means tokens are suffixed, e.g. "mirthGlobalBlue.js"
-  monaco.editor.defineTheme("mirth-js", {
-    base: "vs",
-    inherit: true,
-    rules: [
-      { token: "mirthGlobalBlue.js", foreground: "0000FF" },
-      { token: "mirthGlobalPurple.js", foreground: "7B2D8B" },
-      { token: "mirthGlobalFunction.js", foreground: "7B5000" },
-      // E4X XML tokens — approximate RSyntaxTextArea XML-in-JS colors
-      { token: "tag.xml.js", foreground: "800000" },
-      { token: "attribute.name.xml.js", foreground: "FF0000" },
-      { token: "attribute.value.xml.js", foreground: "0000FF" },
-      { token: "comment.xml.js", foreground: "3F7F5F" },
-    ],
-    // Shade the line-number gutter so it reads as a non-editable margin,
-    // delineated from the white edit area item 4).
-    colors: {
-      "editorGutter.background": "#f3f4f6",
-      "editorLineNumber.foreground": "#9ca3af",
-      "editorLineNumber.activeForeground": "#374151",
-    },
-  });
-  monaco.editor.defineTheme("mirth-js-dark", {
-    base: "vs-dark",
-    inherit: true,
-    rules: [
-      { token: "mirthGlobalBlue.js", foreground: "6CB6FF" }, // light blue
-      { token: "mirthGlobalPurple.js", foreground: "D4AAFF" }, // light lavender
-      { token: "mirthGlobalFunction.js", foreground: "FFAB70" }, // light amber
-      // E4X XML tokens
-      { token: "tag.xml.js", foreground: "F28B82" }, // salmon
-      { token: "attribute.name.xml.js", foreground: "9CDCFE" }, // light blue
-      { token: "attribute.value.xml.js", foreground: "CE9178" }, // orange-tan
-      { token: "comment.xml.js", foreground: "6A9955" }, // muted green
-    ],
-    // Shade the line-number gutter so it reads as a non-editable margin,
-    // delineated from the edit area item 4). Values match VS Code's
-    // dark gutter tone so it stays subtle against the vs-dark editor background.
-    colors: {
-      "editorGutter.background": "#252526",
-      "editorLineNumber.foreground": "#858585",
-      "editorLineNumber.activeForeground": "#c6c6c6",
-    },
-  });
+  // The mirthGlobal*/E4X/JSDoc colors for these tokens live in
+  // `lib/monaco-theme.ts`, not here: Monaco themes are global per instance, so
+  // the app defines exactly one. Keep the token names emitted by
+  // buildRhinoMonarchLanguage() in step with that module's Rhino rules.
 
   // ── Completion providers — only register once per version ───────────────────
   if (providersAlreadyRegistered) return;
@@ -2820,16 +2793,38 @@ export function registerRhinoLanguage(monaco: typeof MonacoType) {
     },
   });
 
-  // ── Document Formatting Provider: delegate to Monaco's JS worker ─────────────
-  // Creates a temporary "javascript" model so the TypeScript language service
-  // can format the code. Converts TS TextChange[] (char offsets) to Monaco
-  // TextEdit[] (line+col ranges). Falls back silently on any error.
+  // ── Document Formatting Provider ─────────────────────────────────────────────
+  // Server-first: the Core `_prettyPrintScript` endpoint runs js-beautify with
+  // { e4x: true } — the same E4X-aware formatter the desktop client uses — which
+  // Monaco's built-in TypeScript worker is not. On a Core below the endpoint's
+  // floor, or any server error, we fall back to the TS worker (below)..
+  //
+  // TODO: delete the TS-worker fallback once MIN_SUPPORTED_SERVER_VERSION >=
+  // MIN_SERVER_MISC_UTILS.
 
   monaco.languages.registerDocumentFormattingEditProvider(LANG_ID, {
     async provideDocumentFormattingEdits(model, options) {
       const code = model.getValue();
       if (!code.trim()) return [];
 
+      if (serverSupportsPrettyPrint()) {
+        try {
+          const formatted = await prettyPrintScript(code);
+          // Apply as a single full-range replace (one undo step). Skip a no-op.
+          if (formatted && formatted !== code) {
+            return [{ range: model.getFullModelRange(), text: formatted }];
+          }
+          return [];
+        } catch {
+          // Fall through to the Monaco TS-worker fallback below.
+        }
+      }
+
+      // Fallback (Core < MIN_SERVER_MISC_UTILS, or a server error above): delegate
+      // to Monaco's JS worker. Creates a temporary "javascript" model so the
+      // TypeScript language service can format the code, then converts its
+      // TS TextChange[] (char offsets) to Monaco TextEdit[] (line+col ranges).
+      // Falls back silently on any error.
       const tempUri = monaco.Uri.parse(`inmemory://rhino_fmt_${Date.now()}.js`);
       const tempModel = monaco.editor.createModel(code, "javascript", tempUri);
 
@@ -3001,7 +2996,10 @@ export function registerRhinoLanguage(monaco: typeof MonacoType) {
         surfaceGateEnabledSnapshot(c)
       );
 
-      for (const category of [...CATEGORIES, ...pluginCategories]) {
+      // Read the catalog fresh each completion request — server-derived when loaded,
+      // frozen client CATEGORIES otherwise. Picks up the async load with no
+      // provider re-registration.
+      for (const category of [...getScriptReferenceCatalog(), ...pluginCategories]) {
         // Variables category is already covered by the globals provider — skip
         if (category.id === "variables") continue;
 

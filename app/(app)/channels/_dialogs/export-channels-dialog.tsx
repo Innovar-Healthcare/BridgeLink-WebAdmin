@@ -12,7 +12,10 @@ import { Button } from "@/components/ui/button";
 import { RefreshCw } from "lucide-react";
 import { getChannelExportData } from "@/lib/api-client";
 import { downloadBlob } from "@/lib/download";
-import { stripEmptyExportDataFields } from "../_lib/export-helpers";
+import {
+  stripEmptyExportDataFields,
+  resolveExportLibrariesAutoAnswer,
+} from "../_lib/export-helpers";
 
 export interface ExportChannelSpec {
   id: string;
@@ -99,9 +102,19 @@ export function ExportChannelsDialog({
             if (name) allLibNames.add(name);
           });
       });
-      setLibraryNames([...allLibNames]);
+      const names = [...allLibNames];
+      setLibraryNames(names);
       setProgress(100);
       setProgressLabel("");
+      // Auto-answer based on the admin pref when libraries are present, matching
+      // the single-channel export path — skip the confirm phase entirely.
+      if (names.length > 0) {
+        const autoAnswer = resolveExportLibrariesAutoAnswer();
+        if (autoAnswer !== null) {
+          doExport(autoAnswer).catch(fail);
+          return;
+        }
+      }
       setPhase("confirm");
     }
 

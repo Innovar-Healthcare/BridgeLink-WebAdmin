@@ -11,6 +11,7 @@ import {
   GripVertical,
   Filter,
   ArrowRightLeft,
+  Reply,
   ListOrdered,
   Globe,
   Network,
@@ -64,6 +65,16 @@ export interface ChannelFlowPanelProps {
   onSelectPluginTab?: (key: string) => void;
   /** Number of channel scripts that differ from their default template (0–4). */
   scriptCount?: number;
+  /** Open the source connector's Filter editor. Badge is inert when omitted. */
+  onOpenSourceFilter?: () => void;
+  /** Open the source connector's Transformer editor. Badge is inert when omitted. */
+  onOpenSourceTransformer?: () => void;
+  /** Open destination[destIndex]'s Filter editor. Badge is inert when omitted. */
+  onOpenDestFilter?: (destIndex: number) => void;
+  /** Open destination[destIndex]'s Transformer editor. Badge is inert when omitted. */
+  onOpenDestTransformer?: (destIndex: number) => void;
+  /** Open destination[destIndex]'s Response Transformer editor. Badge is inert when omitted. */
+  onOpenDestResponseTransformer?: (destIndex: number) => void;
 }
 
 // ─── Connector icon lookup ─────────────────────────────────────────────────────
@@ -179,29 +190,82 @@ function canRemoveOrDisable(destinations: DestinationConnectorState[], index: nu
   return destinations.filter((d) => d.enabled).length > 1;
 }
 
+/**
+ * Props that make a non-button element behave like a button (click + Enter/Space),
+ * so a card can contain real nested <button> badges (buttons can't nest in HTML).
+ */
+function cardActivationProps(onActivate: () => void) {
+  return {
+    role: "button" as const,
+    tabIndex: 0,
+    onClick: onActivate,
+    onKeyDown: (e: React.KeyboardEvent) => {
+      // Ignore keys bubbling up from a nested badge button so Enter/Space on a
+      // badge doesn't also activate the card underneath it.
+      if (e.target !== e.currentTarget) return;
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onActivate();
+      }
+    },
+  };
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-/** Small icon+count badge for filter rules or transformer steps. */
+const BADGE_CLASS =
+  "inline-flex items-center gap-0.5 text-[10px] font-medium " +
+  "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 " +
+  "px-1.5 py-0.5 rounded-full border border-blue-200 dark:border-blue-800";
+
+/**
+ * Small icon+count badge for filter rules, transformer steps, or response
+ * transformer steps. Renders as a plain span when `onClick` is omitted, or as
+ * a real button (with `stopPropagation` so it doesn't also select the card)
+ * when a navigation callback is provided.
+ */
 function CountBadge({
   count,
   icon: Icon,
   label,
+  onClick,
+  actionLabel,
 }: {
   count: number;
   icon: LucideIcon;
   label: string;
+  onClick?: () => void;
+  actionLabel?: string;
 }) {
   if (count === 0) return null;
-  return (
-    <span
-      title={`${count} ${label}`}
-      className="inline-flex items-center gap-0.5 text-[10px] font-medium
-                 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60
-                 px-1.5 py-0.5 rounded-full border border-blue-200 dark:border-blue-800"
-    >
+  const title = `${count} ${label}`;
+  const body = (
+    <>
       <Icon className="w-2.5 h-2.5 shrink-0" />
       {count}
-    </span>
+    </>
+  );
+  if (!onClick) {
+    return (
+      <span title={title} className={BADGE_CLASS}>
+        {body}
+      </span>
+    );
+  }
+  return (
+    <button
+      title={title}
+      aria-label={actionLabel ? `${actionLabel} (${title})` : title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className={`${BADGE_CLASS} cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-900/60
+                  hover:border-blue-400 dark:hover:border-blue-600
+                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500`}
+    >
+      {body}
+    </button>
   );
 }
 
@@ -268,6 +332,11 @@ export function ChannelFlowPanel({
   activePluginTab,
   onSelectPluginTab,
   scriptCount = 0,
+  onOpenSourceFilter,
+  onOpenSourceTransformer,
+  onOpenDestFilter,
+  onOpenDestTransformer,
+  onOpenDestResponseTransformer,
 }: ChannelFlowPanelProps) {
   const srcFilterRules = countXmlElements(sourceConnector?.filterXml);
   const srcTxSteps = countXmlElements(sourceConnector?.transformerXml);
@@ -378,7 +447,8 @@ export function ChannelFlowPanel({
   // ── Shared card style helpers ──────────────────────────────────────────────
 
   const cardBase =
-    "w-full text-left rounded-lg border-2 px-3 py-2.5 cursor-pointer transition-all duration-150 group";
+    "w-full text-left rounded-lg border-2 px-3 py-2.5 cursor-pointer transition-all duration-150 group " +
+    "outline-none focus-visible:ring-2 focus-visible:ring-blue-500 select-none";
 
   const cardSelected = "border-blue-500 bg-blue-50 dark:bg-blue-950/40 shadow-sm";
 
@@ -410,6 +480,7 @@ export function ChannelFlowPanel({
   ) {
     const filterRules = countXmlElements(dest.filterXml);
     const txSteps = countXmlElements(dest.transformerXml);
+    const respTxSteps = countXmlElements(dest.responseTransformerXml);
     const isEnabled = dest.enabled;
     const isSelected =
       !activePluginTab &&
@@ -491,8 +562,8 @@ export function ChannelFlowPanel({
               </button>
             ) : (
               /* ── Full card ────────────────────────────────────────── */
-              <button
-                onClick={() => onSelect({ type: "destination", index: i })}
+              <div
+                {...cardActivationProps(() => onSelect({ type: "destination", index: i }))}
                 className={`${cardBase} ${isSelected ? cardSelected : cardIdle} ${dragTargetClass}`}
               >
                 <div className="flex items-center gap-2 mb-1">
@@ -540,22 +611,41 @@ export function ChannelFlowPanel({
                     </span>
                   )}
                 </div>
-                {(filterRules > 0 || txSteps > 0 || dest.queue.queueEnabled) && (
+                {(filterRules > 0 || txSteps > 0 || respTxSteps > 0 || dest.queue.queueEnabled) && (
                   <div className="flex flex-wrap gap-1 mt-1.5">
                     <CountBadge
                       count={filterRules}
                       icon={Filter}
                       label={filterRules === 1 ? "filter rule" : "filter rules"}
+                      actionLabel="Edit Filter"
+                      onClick={onOpenDestFilter ? () => onOpenDestFilter(i) : undefined}
                     />
                     <CountBadge
                       count={txSteps}
                       icon={ArrowRightLeft}
                       label={txSteps === 1 ? "transformer step" : "transformer steps"}
+                      actionLabel="Edit Transformer"
+                      onClick={onOpenDestTransformer ? () => onOpenDestTransformer(i) : undefined}
+                    />
+                    <CountBadge
+                      count={respTxSteps}
+                      icon={Reply}
+                      label={
+                        respTxSteps === 1
+                          ? "response transformer step"
+                          : "response transformer steps"
+                      }
+                      actionLabel="Edit Response Transformer"
+                      onClick={
+                        onOpenDestResponseTransformer
+                          ? () => onOpenDestResponseTransformer(i)
+                          : undefined
+                      }
                     />
                     {dest.queue.queueEnabled && <QueueBadge sendFirst={dest.queue.sendFirst} />}
                   </div>
                 )}
-              </button>
+              </div>
             )}
           </ContextMenuTrigger>
           <ContextMenuContent>
@@ -624,8 +714,8 @@ export function ChannelFlowPanel({
       {/* ── SOURCE node ─────────────────────────────────────────────────── */}
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <button
-            onClick={() => onSelect("source")}
+          <div
+            {...cardActivationProps(() => onSelect("source"))}
             className={`${cardBase} ${selection === "source" && !activePluginTab ? cardSelected : cardIdle}`}
           >
             <div className="flex items-center gap-2 mb-1">
@@ -648,16 +738,20 @@ export function ChannelFlowPanel({
                   count={srcFilterRules}
                   icon={Filter}
                   label={srcFilterRules === 1 ? "filter rule" : "filter rules"}
+                  actionLabel="Edit Filter"
+                  onClick={onOpenSourceFilter}
                 />
                 <CountBadge
                   count={srcTxSteps}
                   icon={ArrowRightLeft}
                   label={srcTxSteps === 1 ? "transformer step" : "transformer steps"}
+                  actionLabel="Edit Transformer"
+                  onClick={onOpenSourceTransformer}
                 />
                 {srcQueueEnabled && <QueueBadge sendFirst={false} title="Source Queue: ON" />}
               </div>
             )}
-          </button>
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuItem onClick={() => onExportSource()}>Export Connector</ContextMenuItem>

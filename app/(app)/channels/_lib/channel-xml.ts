@@ -2,6 +2,7 @@ import { DATA_TYPE_REGISTRY } from "../_datatypes/index";
 import type { ResourceProperties } from "@/lib/types";
 import { scriptsSemanticallyEqual } from "@/lib/js-validation";
 import { getSession } from "@/lib/auth";
+import { getConnectorDefaultXml } from "@/lib/connector-defaults-cache";
 import {
   readTransmissionModeProperties,
   writeTransmissionModeProperties,
@@ -108,6 +109,23 @@ export const ATTACHMENT_HANDLER_CLASS_NAMES: Partial<Record<AttachmentHandlerTyp
   JavaScript: "com.mirth.connect.server.attachments.javascript.JavaScriptAttachmentHandlerProvider",
 };
 
+/**
+ * Resolves an attachment-handler provider FQN (a data type plugin's
+ * getDefaultAttachmentHandler value) to its built-in handler type, or null
+ * when this build doesn't know the class — the graceful no-op path for
+ * runtime data types declaring a custom provider. Drives the Summary tab's
+ * auto-fill when the source inbound data type changes (Java
+ * getDefaultAttachmentHandlerType parity).
+ */
+export function attachmentHandlerTypeForProviderClass(
+  providerClass: string
+): AttachmentHandlerType | null {
+  const matched = (
+    Object.entries(ATTACHMENT_HANDLER_CLASS_NAMES) as [AttachmentHandlerType, string][]
+  ).find(([, cls]) => cls === providerClass);
+  return matched?.[0] ?? null;
+}
+
 export interface RegexAttachmentPattern {
   pattern: string;
   mimeType: string;
@@ -152,6 +170,13 @@ export type AttachmentCommitResult =
   | AttachmentHandlerState
   | { error: string }
   | { warning: string; value: AttachmentHandlerState };
+
+/**
+ * A body component's commit function, registered on a shared ref so the dialog shell can call
+ * it at save time. Async because the JavaScript body may validate its script server-side
+ *; the non-JS bodies resolve immediately.
+ */
+export type AttachmentCommitFn = () => Promise<AttachmentCommitResult>;
 
 export interface PruningSettings {
   /** Days to retain message metadata; null = no per-channel override (use server default). */
@@ -1221,164 +1246,28 @@ export function parseDestinationNamesFromXml(xml: string): string[] {
 
 // ─── Poll Connector Properties ────────────────────────────────────────────────
 
-export type PollingType = "INTERVAL" | "TIME" | "CRON";
-
-/** A single Quartz cron job entry stored inside `<cronJobs>`. */
-export interface CronJob {
-  // Quartz cron expression (6-7 fields). Example: every 5 s = "*/5 * * * * ?"
-  expression: string;
-  // Human-readable description stored alongside the expression in the XML.
-  description: string;
-}
-
 /**
- * Advanced day/time restriction settings for polling connectors.
- * Mirrors Java's `PollConnectorPropertiesAdvanced`.
+ * Poll-connector types, defaults and the parser now live in `poll-connector-xml.ts` so
+ * that callers reachable from a React Server Component can use them without dragging this module —
+ * and therefore DATA_TYPE_REGISTRY and every client `.tsx` datatype — across the boundary.
  *
- * `inactiveDays` is INVERTED: `false` = active, `true` = inactive.
- *
- * This internal array is 0-based — index 0=Sun … 6=Sat (matches JS `Date.getDay()`).
- * The server's XML/Quartz form is Calendar-indexed instead (`<boolean>` position
- * 1=Sun … 7=Sat, position 0 unused), because the server feeds the array straight into
- * Quartz `WeeklyCalendar.setDaysExcluded`, which indexes by `java.util.Calendar` day
- * constants (SUNDAY=1 … SATURDAY=7). The +1 translation happens at the
- * `parsePollConnectorFromPropertiesXml` / `updatePollConnectorInPropertiesXml` boundary
- * below, so the emitted XML is byte-identical to the Java client's.
+ * Re-exported here so existing importers keep working. New server-reachable code (connector plugin
+ * definitions, validation helpers) must import from `poll-connector-xml` DIRECTLY; importing them
+ * from here defeats the split.
  */
-export interface AdvancedPollingSettings {
-  weekly: boolean;
-  inactiveDays: boolean[]; // length 7+; index 0=Sun…6=Sat; true=inactive
-  dayOfMonth: number; // 1–31, used only when weekly=false
-  allDay: boolean;
-  startingHour: number; // 0–23, used only when allDay=false
-  startingMinute: number; // 0–59
-  endingHour: number; // 0–23
-  endingMinute: number; // 0–59
-}
+export type {
+  PollingType,
+  CronJob,
+  AdvancedPollingSettings,
+  PollConnectorState,
+} from "./poll-connector-xml";
+export {
+  DEFAULT_ADVANCED_POLLING,
+  parsePollConnectorFromPropertiesXml,
+} from "./poll-connector-xml";
 
-export const DEFAULT_ADVANCED_POLLING: AdvancedPollingSettings = {
-  weekly: true,
-  inactiveDays: [false, false, false, false, false, false, false],
-  dayOfMonth: 1,
-  allDay: true,
-  startingHour: 8,
-  startingMinute: 0,
-  endingHour: 17,
-  endingMinute: 0,
-};
-
-export interface PollConnectorState {
-  pollingType: PollingType;
-  pollOnStart: boolean;
-  /** Polling interval in milliseconds. Used when pollingType === "INTERVAL". */
-  pollingFrequency: number;
-  /** Hour of day 0-23. Used when pollingType === "TIME". */
-  pollingHour: number;
-  /** Minute of hour 0-59. Used when pollingType === "TIME". */
-  pollingMinute: number;
-  /** Quartz cron schedules. Used when pollingType === "CRON". */
-  cronJobs: CronJob[];
-  /** Advanced day/time restrictions. Always present; defaults mean "no restrictions". */
-  advanced: AdvancedPollingSettings;
-}
-
-const DEFAULT_POLL_STATE: PollConnectorState = {
-  pollingType: "INTERVAL",
-  pollOnStart: false,
-  pollingFrequency: 5000,
-  pollingHour: 0,
-  pollingMinute: 0,
-  cronJobs: [],
-  advanced: { ...DEFAULT_ADVANCED_POLLING },
-};
-
-/**
- * Parses poll connector properties from a connector's `propertiesXml` blob
- * (the outer `<properties>` element XML stored in SourceConnectorState).
- */
-export function parsePollConnectorFromPropertiesXml(
-  propertiesXml: string | null
-): PollConnectorState {
-  if (!propertiesXml) return { ...DEFAULT_POLL_STATE };
-  const doc = new DOMParser().parseFromString(propertiesXml, "application/xml");
-  const pcp = doc.querySelector("pollConnectorProperties");
-  if (!pcp) return { ...DEFAULT_POLL_STATE };
-
-  function t(tag: string, def: string): string {
-    return pcp!.querySelector(tag)?.textContent?.trim() ?? def;
-  }
-  function b(tag: string, def: boolean): boolean {
-    const v = pcp!.querySelector(tag)?.textContent?.trim();
-    return v === undefined ? def : v === "true";
-  }
-  function n(tag: string, def: number): number {
-    const v = pcp!.querySelector(tag)?.textContent?.trim();
-    const p = v !== undefined ? parseInt(v, 10) : NaN;
-    return isNaN(p) ? def : p;
-  }
-
-  const pt = t("pollingType", "INTERVAL");
-
-  // Parse <cronJobs><cronProperty>…</cronProperty></cronJobs>
-  const cronJobs: CronJob[] = [];
-  const cronJobsEl = pcp.querySelector(":scope > cronJobs");
-  if (cronJobsEl) {
-    for (const cp of Array.from(cronJobsEl.querySelectorAll(":scope > cronProperty"))) {
-      cronJobs.push({
-        expression: cp.querySelector("expression")?.textContent ?? "",
-        description: cp.querySelector("description")?.textContent ?? "",
-      });
-    }
-  }
-
-  // Parse <pollConnectorPropertiesAdvanced>
-  const adv = pcp.querySelector(":scope > pollConnectorPropertiesAdvanced");
-  let advanced: AdvancedPollingSettings;
-  if (adv) {
-    function ab(tag: string, def: boolean): boolean {
-      const v = adv!.querySelector(tag)?.textContent?.trim();
-      return v === undefined ? def : v === "true";
-    }
-    function an(tag: string, def: number): number {
-      const v = adv!.querySelector(tag)?.textContent?.trim();
-      const p = v !== undefined ? parseInt(v, 10) : NaN;
-      return isNaN(p) ? def : p;
-    }
-    // <inactiveDays> contains 8 Calendar-indexed <boolean> children: position 0 is the
-    // unused reserved slot, positions 1–7 are Sun–Sat. Shift down by one into our 0-based
-    // internal array (index 0=Sun … 6=Sat).
-    const inactiveDaysEl = adv.querySelector(":scope > inactiveDays");
-    const rawBools = inactiveDaysEl
-      ? Array.from(inactiveDaysEl.querySelectorAll(":scope > boolean")).map(
-          (el) => el.textContent?.trim() === "true"
-        )
-      : [];
-    const inactiveDays: boolean[] = Array.from({ length: 7 }, (_, i) => rawBools[i + 1] ?? false);
-    advanced = {
-      weekly: ab("weekly", true),
-      inactiveDays,
-      dayOfMonth: an("dayOfMonth", 1),
-      allDay: ab("allDay", true),
-      startingHour: an("startingHour", 8),
-      startingMinute: an("startingMinute", 0),
-      endingHour: an("endingHour", 17),
-      endingMinute: an("endingMinute", 0),
-    };
-  } else {
-    advanced = { ...DEFAULT_ADVANCED_POLLING };
-  }
-
-  return {
-    pollingType:
-      pt === "INTERVAL" || pt === "TIME" || pt === "CRON" ? (pt as PollingType) : "INTERVAL",
-    pollOnStart: b("pollOnStart", false),
-    pollingFrequency: n("pollingFrequency", 5000),
-    pollingHour: n("pollingHour", 0),
-    pollingMinute: n("pollingMinute", 0),
-    cronJobs,
-    advanced,
-  };
-}
+// Only the write path below still lives here, and it needs just the state shape.
+import type { PollConnectorState } from "./poll-connector-xml";
 
 /**
  * Writes updated poll connector state back into the propertiesXml blob.
@@ -1630,10 +1519,10 @@ export interface DICOMListenerProps {
   dest: string;
   // Timing
   soCloseDelay: string; // ms
-  releaseTo: string; // s
-  requestTo: string; // s
-  idleTo: string; // s
-  reaper: string; // s — association reaper period
+  releaseTo: string; // ms — shipped value is a Core sentinel meaning "use the engine default"
+  requestTo: string; // ms — shipped value is a Core sentinel meaning "use the engine default"
+  idleTo: string; // ms — shipped value is a Core sentinel meaning "use the engine default"
+  reaper: string; // ms — shipped value is a Core sentinel meaning "use the engine default" — association reaper period
   rspDelay: string; // ms
   // PDU / Transfer
   pdv1: boolean;
@@ -2226,7 +2115,7 @@ export function updateFileReaderPropsInXml(propertiesXml: string, p: FileReaderP
   }
   // FILE and WEBDAV: no schemeProperties element
 
-  // All flat fields.: mirror Java FileReader.java getProperties() path normalization
+  // All flat fields. mirror Java FileReader.java getProperties() path normalization
   // — the FILE-scheme directory (host) and the move-to directories have their backslashes
   // normalized to forward slashes so server-generated strings don't show mixed separators.
   // moveToDirectory/errorMoveToDirectory are normalized unconditionally (as Java does), since
@@ -2530,6 +2419,8 @@ export interface TcpListenerProps {
   ackBytes: string; // hex ACK character (default "06")
   nackBytes: string; // hex NACK character (default "15")
   maxRetries: string; // MLLP v2 retries (default "2")
+  // Runtime-mode field values (element name → text); {} for built-in modes
+  extra: Record<string, string>;
   // Mode
   serverMode: boolean; // true = server (listen), false = client (connect)
   // Client mode-only fields
@@ -2561,6 +2452,7 @@ const TCP_LISTENER_DEFAULTS: TcpListenerProps = {
   ackBytes: "06",
   nackBytes: "15",
   maxRetries: "2",
+  extra: {},
   serverMode: true,
   remoteAddress: "",
   remotePort: "",
@@ -4068,6 +3960,13 @@ export function addDestinationToXml(xml: string, transportName: string): string 
   );
   const destName = nextDestinationName(existingNames);
 
+  // Server-instantiated defaults first for the 10 safe built-in destinations;
+  // a miss (group-C "TCP Sender", old server, or prefetch not yet resolved) falls back to
+  // the hardcoded template. withVersion is a no-op on an already-versioned server fragment
+  // (it only substitutes the literal {{VERSION}} token), so this is safe either way.
+  const destDefault =
+    getConnectorDefaultXml(transportName) ?? DEFAULT_DEST_PROPERTIES_XML[transportName] ?? null;
+
   const newState: DestinationConnectorState = {
     metaDataId: nextId,
     name: destName,
@@ -4075,9 +3974,7 @@ export function addDestinationToXml(xml: string, transportName: string): string 
     enabled: true,
     waitForPrevious: true,
     queue: defaultQueueForType(transportName),
-    propertiesXml: DEFAULT_DEST_PROPERTIES_XML[transportName]
-      ? withVersion(DEFAULT_DEST_PROPERTIES_XML[transportName], version)
-      : null,
+    propertiesXml: destDefault ? withVersion(destDefault, version) : null,
     filterXml: withVersion(DEFAULT_DEST_FILTER_XML, version),
     transformerXml: buildDefaultTransformerXml(version, srcOutboundType),
     responseTransformerXml: buildDefaultResponseTransformerXml(version),
@@ -4865,6 +4762,8 @@ export interface TcpSenderProps {
   ackBytes: string; // hex ACK character (default "06")
   nackBytes: string; // hex NACK character (default "15")
   maxRetries: string; // MLLP v2 retries (default "2")
+  // Runtime-mode field values (element name → text); {} for built-in modes
+  extra: Record<string, string>;
   // Connection
   serverMode: boolean;
   remoteAddress: string;
@@ -4893,6 +4792,7 @@ const DEFAULT_TCP_SENDER_PROPS: TcpSenderProps = {
   ackBytes: "06",
   nackBytes: "15",
   maxRetries: "2",
+  extra: {},
   serverMode: false,
   remoteAddress: "127.0.0.1",
   remotePort: "6660",
@@ -5389,7 +5289,7 @@ export function updateFileWriterPropsInXml(propertiesXml: string, props: FileWri
   }
 
   set("scheme", fileSchemeToXml(props.scheme));
-  //: mirror Java FileWriter.java getProperties() — for the local FILE scheme the
+  // mirror Java FileWriter.java getProperties() — for the local FILE scheme the
   // directory's backslashes are normalized to forward slashes on save, so server-generated
   // strings (response message, sent-URI metadata, event log) don't show mixed separators
   // (e.g. C:\out/file.txt). Network hosts (SMB \\server\share, etc.) are left untouched.
@@ -5824,14 +5724,14 @@ export interface DicomSenderProps {
   acceptTo: string;
   async: string;
   bufSize: string;
-  connectTo: string;
+  connectTo: string; // ms — shipped value is a Core sentinel meaning "use the engine default"
   priority: string; // "high" | "med" | "low"
   passcode: string;
   pdv1: boolean;
   rcvpdulen: string;
-  reaper: string;
-  releaseTo: string;
-  rspTo: string;
+  reaper: string; // ms — shipped value is a Core sentinel meaning "use the engine default" — association reaper period
+  releaseTo: string; // ms — shipped value is a Core sentinel meaning "use the engine default"
+  rspTo: string; // ms — shipped value is a Core sentinel meaning "use the engine default"
   shutdownDelay: string;
   sndpdulen: string;
   soCloseDelay: string;

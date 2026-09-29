@@ -1,0 +1,84 @@
+{
+  "$schema": "https://schemas.bridgelink.online/webadmin-plugin/v2.json",
+  "manifestVersion": 2,
+  "connectorSections": [
+    {
+      "mode": "source",
+      "name": "Mock Audit",
+      "propertiesClass": "com.innovarhealthcare.connect.plugins.mockaudit.MockAuditPluginProperties",
+      "appliesTo": ["HTTP Listener", "TCP Listener"],
+      "sections": [
+        {
+          "title": "Mock Audit",
+          "fields": [
+            {
+              "key": "auditEnabled",
+              "type": "checkbox",
+              "label": "Enable Auditing",
+              "tooltip": "Record an audit event for every message this connector receives.",
+              "defaultValue": "false"
+            },
+            {
+              "key": "auditEndpoint",
+              "type": "text",
+              "label": "Audit Endpoint",
+              "tooltip": "Host and port of the audit repository.",
+              "placeholder": "audit.example.com:6514",
+              "visibleWhen": { "field": "auditEnabled", "op": "truthy" },
+              "validation": [
+                {
+                  "rule": "required",
+                  "message": "An audit endpoint is required when auditing is enabled."
+                }
+              ]
+            },
+            {
+              "key": "secureChannel",
+              "type": "checkbox",
+              "label": "Secure Channel",
+              "tooltip": "Terminate TLS in the audit interceptor. Flips the listener's URL preview to https.",
+              "defaultValue": "false"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "Test Audit Endpoint",
+          "endpoint": "/extensions/mock-audit-section/webadmin/actions/test-endpoint",
+          "method": "POST",
+          "confirm": "Send a test event to the configured audit endpoint?"
+        }
+      ],
+      "securesTransportWhen": { "field": "secureChannel", "op": "truthy" }
+    },
+    {
+      "mode": "destination",
+      "name": "Mock Audit Destination",
+      "propertiesClass": "com.innovarhealthcare.connect.plugins.mockaudit.MockAuditPluginProperties",
+      "appliesTo": ["HTTP Sender"],
+      "sections": [
+        {
+          "title": "Mock Audit",
+          "fields": [
+            {
+              "key": "auditEnabled",
+              "type": "checkbox",
+              "label": "Enable Auditing",
+              "tooltip": "Record an audit event for every message this connector sends.",
+              "defaultValue": "false"
+            },
+            {
+              "key": "auditEndpoint",
+              "type": "text",
+              "label": "Audit Endpoint",
+              "placeholder": "audit.example.com:6514",
+              "visibleWhen": { "field": "auditEnabled", "op": "truthy" }
+            }
+          ]
+        }
+      ],
+      "securesTransportWhen": true
+    }
+  ]
+}

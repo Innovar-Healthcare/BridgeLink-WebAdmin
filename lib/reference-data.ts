@@ -4,10 +4,18 @@
  * Contains the RefItem / RefCategory types, the splitLabel utility, and
  * the CATEGORIES constant (mirrors Java ReferenceListFactory + Category enum).
  *
- * Used by:
- *  - filter/transformer Reference panel sidebar (drag-drop into editor)
- *  - Scripts tab and attachment-handler Reference panel
- *  - Monaco autocomplete completion provider (built-in reference snippets)
+ * Since, consumers no longer import CATEGORIES directly — they read the catalog
+ * through `lib/script-references-catalog.ts`, which fetches it from the connected server
+ * (`GET /server/scriptReferences`) and falls back here. This file now serves two roles:
+ *   1. The FROZEN FALLBACK for servers that predate the endpoint (or before the fetch
+ *      lands / on fetch failure) — the full `CATEGORIES` set, returned verbatim.
+ *   2. The source of `CLIENT_ONLY_CATEGORIES` (E4X + userutil), which have no server
+ *      counterpart and are appended to the server-derived catalog on every server (see
+ *      `CLIENT_ONLY_CATEGORY_IDS` below and the adapter's `assembleCatalog`).
+ *
+ * When the server floor (`MIN_SUPPORTED_SERVER_VERSION`) eventually clears
+ * `MIN_SERVER_SCRIPT_REFERENCES`, role 1 can be dropped and this file shrinks to the
+ * types, `splitLabel`, `isRefItemVisibleInContext`, and the client-only categories.
  *
  * No React imports needed — pure TypeScript.
  */
@@ -1596,3 +1604,24 @@ export const CATEGORIES: RefCategory[] = [
     ],
   },
 ];
+
+/**
+ * Category ids with NO server counterpart in `GET /server/scriptReferences`.
+ * `e4x` is a JS language feature the server models as member-completion refs (a different
+ * UX we don't adopt — kept as hand-authored drag snippets); the four userutil categories
+ * come from `ReferenceListFactory.addUserutilReferences()`, which Core has not ported.
+ * These stay client-side regardless of server version and are appended, in this order,
+ * after the server-derived categories by the catalog adapter (`assembleCatalog`).
+ */
+export const CLIENT_ONLY_CATEGORY_IDS = [
+  "e4x",
+  "httpListener",
+  "httpSender",
+  "fileReader",
+  "lookupTable",
+] as const;
+
+/** The client-only categories (see {@link CLIENT_ONLY_CATEGORY_IDS}), in on-screen order. */
+export const CLIENT_ONLY_CATEGORIES: RefCategory[] = CLIENT_ONLY_CATEGORY_IDS.map(
+  (id) => CATEGORIES.find((c) => c.id === id)!
+);

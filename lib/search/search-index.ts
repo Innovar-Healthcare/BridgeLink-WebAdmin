@@ -111,6 +111,7 @@ export async function buildSearchIndex(opts: BuildIndexOptions): Promise<Indexed
               label: "Code",
               content: t.code,
               navigateTo: { type: "code-template", templateId: t.id, templateName: t.name },
+              lineBasis: "editor",
             },
           ],
         });
@@ -146,6 +147,7 @@ export async function buildSearchIndex(opts: BuildIndexOptions): Promise<Indexed
               label: key,
               content: code,
               navigateTo: { type: "global-script", scriptKey: key },
+              lineBasis: "editor",
             },
           ],
         });
@@ -171,6 +173,7 @@ export async function buildSearchIndex(opts: BuildIndexOptions): Promise<Indexed
             label: entry.key,
             content,
             navigateTo: { type: "config-map", entryKey: entry.key },
+            lineBasis: "synthetic",
           },
         ],
       });

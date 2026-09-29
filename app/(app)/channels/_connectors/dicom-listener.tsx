@@ -132,8 +132,8 @@ function DICOMListenerBottomSection({
           </HoverTooltip>
         </FieldRow>
 
-        <FieldRow label="A-RELEASE-RP timeout (s):">
-          <HoverTooltip content="Timeout in ms for receiving A-RELEASE-RP, 5s by default.">
+        <FieldRow label="A-RELEASE-RP timeout (ms):">
+          <HoverTooltip content="Timeout in milliseconds for receiving A-RELEASE-RP. Leave at 5 to use the engine default of 5000 ms; any other value is applied verbatim as milliseconds.">
             <input
               type="text"
               inputMode="numeric"
@@ -146,7 +146,7 @@ function DICOMListenerBottomSection({
         </FieldRow>
 
         <FieldRow label="ASSOCIATE-RQ timeout (ms):">
-          <HoverTooltip content="Timeout in ms for receiving -ASSOCIATE-RQ, 5s by default.">
+          <HoverTooltip content="Timeout in milliseconds for receiving A-ASSOCIATE-RQ. Leave at 5 to use the engine default of 5000 ms; any other value is applied verbatim as milliseconds.">
             <input
               type="text"
               inputMode="numeric"
@@ -159,7 +159,7 @@ function DICOMListenerBottomSection({
         </FieldRow>
 
         <FieldRow label="DIMSE-RQ timeout (ms):">
-          <HoverTooltip content="Timeout in ms for receiving DIMSE-RQ, 60s by default.">
+          <HoverTooltip content="Timeout in milliseconds for receiving DIMSE-RQ. Leave at 60 to use the engine default of 60000 ms; any other value is applied verbatim as milliseconds.">
             <input
               type="text"
               inputMode="numeric"
@@ -171,8 +171,8 @@ function DICOMListenerBottomSection({
           </HoverTooltip>
         </FieldRow>
 
-        <FieldRow label="DIMSE-RSP interval period (s):">
-          <HoverTooltip content="Period in ms to check for outstanding DIMSE-RSP, 10s by default">
+        <FieldRow label="DIMSE-RSP interval period (ms):">
+          <HoverTooltip content="Period in milliseconds between checks for outstanding DIMSE-RSP. Leave at 10 to use the engine default of 10000 ms; any other value is applied verbatim as milliseconds.">
             <input
               type="text"
               inputMode="numeric"

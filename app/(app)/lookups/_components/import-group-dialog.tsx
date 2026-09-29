@@ -8,6 +8,7 @@ import {
   DEFAULT_LOOKUP_GROUPS,
   type DefaultLookupGroupPayload,
 } from "../_data/default-lookup-groups";
+import { checkFileSize } from "@/lib/file-size-guard";
 
 interface ImportGroupDialogProps {
   /** Called when the dialog requests closing without importing. */
@@ -51,6 +52,11 @@ export function ImportGroupDialog({ onClose, onImport }: ImportGroupDialogProps)
     setError(null);
     setFilePayload(null);
     setFileName(null);
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      setError(tooLarge);
+      return;
+    }
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as unknown;

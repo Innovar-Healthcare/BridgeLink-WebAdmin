@@ -6,11 +6,28 @@
 import type {
   DashboardStatus,
   DashboardChannelInfo,
+  ChannelThreadReport,
   ServerLogItem,
   ConnectionLogItem,
   MessageStatisticsTimeseries,
 } from "../types";
 import { request, type XStreamObject, type XStreamValue } from "./api-core";
+import { getSession } from "@/lib/auth";
+import { isVersionAtLeast } from "@/lib/utils";
+
+/**
+ * Core release that first shipped the stop grace period, the `stateSince`/`lifecycleOverdue`
+ * dashboard fields and `GET /channels/{channelId}/_threads`. Controls that would
+ * 404 or 500 against an older Core are hidden below it; the dashboard indicator needs no gate
+ * because it keys off a field an older server never sends. Delete once
+ * `MIN_SUPPORTED_SERVER_VERSION` clears this floor.
+ */
+export const MIN_SERVER_STUCK_CHANNEL_DIAGNOSTICS = "26.9.0";
+
+/** True when the connected Core has the endpoint and settings; false when unknown. */
+export function serverSupportsStuckChannelDiagnostics(): boolean {
+  return isVersionAtLeast(getSession()?.serverVersion, MIN_SERVER_STUCK_CHANNEL_DIAGNOSTICS);
+}
 
 /**
  * Number of statuses fetched per request, matching the Java client's
@@ -418,4 +435,27 @@ export async function getServerTimeseries(
     sent: Number(it.sent ?? 0),
     error: Number(it.error ?? 0),
   }));
+}
+
+/**
+ * GET /channels/{channelId}/_threads?maxFrames=N, BridgeLink 26.9+)
+ *
+ * Every live thread that belongs to a deployed channel, with its state, the lock it is blocked
+ * on and its top stack frames, plus what the most recent stop or halt timed out waiting on. The
+ * server answers with plain JSON (not the XStream envelope), so normalization is skipped: the
+ * `threads` array and the `null` fields arrive exactly as serialized. Stack frames only, never
+ * message content. The server returns 404 for a channel that is not deployed, which surfaces as
+ * a thrown error like every other call.
+ *
+ * Mirrors nothing in the Java Swing client: the endpoint is new in 26.9 and the Swing client has
+ * no thread view; this is a Web UI feature paired with the Core change.
+ */
+export async function getChannelThreads(
+  channelId: string,
+  maxFrames?: number
+): Promise<ChannelThreadReport> {
+  const qs = maxFrames && maxFrames > 0 ? `?maxFrames=${Math.floor(maxFrames)}` : "";
+  return request<ChannelThreadReport>(`/channels/${encodeURIComponent(channelId)}/_threads${qs}`, {
+    skipNormalize: true,
+  });
 }

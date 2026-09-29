@@ -1,0 +1,28 @@
+{
+  "manifestVersion": 3,
+  "connectorSections": [
+    {
+      "mode": "destination",
+      "name": "Corpus Section Collections",
+      "propertiesClass": "com.example.CorpusSectionProperties",
+      "appliesTo": ["HTTP Sender"],
+      "sections": [
+        {
+          "title": "Headers",
+          "presentation": "dialog",
+          "fields": [
+            {
+              "key": "headers",
+              "type": "map",
+              "label": "Headers",
+              "variableToggle": {
+                "variableKey": "headersVariable",
+                "useVariableKey": "isUseHeadersVariable"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

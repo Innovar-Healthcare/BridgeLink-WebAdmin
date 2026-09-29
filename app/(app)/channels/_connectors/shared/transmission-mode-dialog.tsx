@@ -1,86 +1,30 @@
 "use client";
 
+/**
+ * Transmission-mode settings dialog shared by the TCP Listener / TCP Sender
+ * connectors. Mirrors the Java *ModeSettingsDialog family.
+ *
+ * Mode-agnostic: the shared SOM/EOM hex rows render for every mode,
+ * and everything mode-specific comes from the registered definition —
+ * `def.SettingsSection` (MLLP's MLLPv2 block, a runtime mode's declared
+ * fields), `def.validate` (blocks OK + highlights invalid fields), and the
+ * dialog title from the mode name. The byte-abbreviation reference panel is a
+ * drag source for the hex inputs.
+ */
+
 import { useState } from "react";
 import { FormDialog } from "@/components/form-dialog";
-import { RadioGroup } from "./radio-group";
-import { inputCls, inputErrorCls } from "./styles";
-import { useCompactMode } from "@/lib/hooks/use-compact-mode";
-import { NumberInput } from "@/components/ui/number-input";
 import { TRANSMISSION_MODE_REGISTRY } from "./transmission-modes";
+import {
+  BYTE_ABBREVIATIONS,
+  HEX_BYTE_DRAG_TYPE,
+  HexFieldRow,
+  hexToAbbreviation,
+} from "./transmission-modes/hex-field-row";
 import type { TransmissionModeSettings } from "./transmission-modes/types";
 
 export type { TransmissionModeSettings } from "./transmission-modes/types";
-// ─── Byte abbreviation map ────────────────────────────────────────────────────
-
-const CONTROL_ABBREVIATIONS: Record<number, string> = {
-  0: "NUL",
-  1: "SOH",
-  2: "STX",
-  3: "ETX",
-  4: "EOT",
-  5: "ENQ",
-  6: "ACK",
-  7: "BEL",
-  8: "BS",
-  9: "TAB",
-  10: "LF",
-  11: "VT",
-  12: "FF",
-  13: "CR",
-  14: "SO",
-  15: "SI",
-  16: "DLE",
-  17: "DC1",
-  18: "DC2",
-  19: "DC3",
-  20: "DC4",
-  21: "NAK",
-  22: "SYN",
-  23: "ETB",
-  24: "CAN",
-  25: "EM",
-  26: "SUB",
-  27: "ESC",
-  28: "FS",
-  29: "GS",
-  30: "RS",
-  31: "US",
-  32: "SP",
-  127: "DEL",
-};
-
-/** All 128 ASCII byte abbreviations for the reference panel. */
-const BYTE_ABBREVIATIONS: Array<{ hex: string; abbr: string; decimal: number }> = Array.from(
-  { length: 128 },
-  (_, i) => {
-    const hex = i.toString(16).toUpperCase().padStart(2, "0");
-    const abbr = i in CONTROL_ABBREVIATIONS ? CONTROL_ABBREVIATIONS[i]! : String.fromCharCode(i);
-    return { hex, abbr, decimal: i };
-  }
-);
-
-/** Lookup map for O(1) abbreviation lookup by 2-char hex string (uppercase). */
-const ABBR_MAP = new Map<string, string>(BYTE_ABBREVIATIONS.map(({ hex, abbr }) => [hex, abbr]));
-
-/**
- * Converts a hex string of concatenated byte pairs to a bracket-wrapped
- * abbreviation string. e.g. "0B" → "<VT>", "1C0D" → "<FS><CR>"
- */
-export function hexToAbbreviation(hex: string): string {
-  const normalized = hex.toUpperCase().trim();
-  if (!normalized) return "";
-  // Split into 2-char byte pairs
-  const pairs: string[] = [];
-  for (let i = 0; i < normalized.length; i += 2) {
-    pairs.push(normalized.slice(i, i + 2));
-  }
-  return pairs
-    .map((pair) => {
-      const abbr = ABBR_MAP.get(pair);
-      return abbr ? `<${abbr}>` : `<0x${pair}>`;
-    })
-    .join("");
-}
+export { hexToAbbreviation } from "./transmission-modes/hex-field-row";
 
 // ─── Sample Frame Label ───────────────────────────────────────────────────────
 
@@ -99,74 +43,15 @@ export function SampleFrameLabel({
   const sample =
     startAbbr || endAbbr ? `${startAbbr} <Message Data> ${endAbbr}`.trim() : "<Message Data>";
 
-  const label = transmissionMode === "MLLP" ? "MLLP Sample Frame:" : "Sample Frame:";
+  // Java getSampleLabel(): the mode's own label ("MLLP Sample Frame:"), with
+  // the frame-mode default for Basic, runtime modes, and unknown modes.
+  const label =
+    TRANSMISSION_MODE_REGISTRY.find((m) => m.name === transmissionMode)?.sampleLabel ??
+    "Sample Frame:";
 
   return (
     <div className="text-xs text-gray-500 dark:text-gray-400 italic ml-1">
       {label} {sample}
-    </div>
-  );
-}
-
-// ─── Drag-and-drop data key ───────────────────────────────────────────────────
-
-const DRAG_TYPE = "text/x-bl-hex-byte";
-
-// ─── Hex input row ────────────────────────────────────────────────────────────
-
-function HexFieldRow({
-  label,
-  value,
-  onChange,
-  disabled = false,
-  invalid = false,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  disabled?: boolean;
-  invalid?: boolean;
-}) {
-  const { viewDensity } = useCompactMode();
-  const abbr = hexToAbbreviation(value);
-  const [dragOver, setDragOver] = useState(false);
-  return (
-    <div className="flex items-center gap-3 py-1.5">
-      <span className="w-48 text-sm text-right text-gray-700 dark:text-gray-300 shrink-0">
-        {label}
-      </span>
-      <span className="text-sm text-gray-500 dark:text-gray-400 font-mono">0x</span>
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value.toUpperCase())}
-        disabled={disabled}
-        className={`${inputCls(viewDensity)} w-28 font-mono transition-colors ${
-          dragOver && !disabled
-            ? "border-blue-500 dark:border-blue-400 ring-1 ring-blue-500/30"
-            : invalid
-              ? inputErrorCls
-              : ""
-        }`}
-        onDragOver={(e) => {
-          if (disabled) return;
-          if (e.dataTransfer.types.includes(DRAG_TYPE)) {
-            e.preventDefault();
-            setDragOver(true);
-          }
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          if (disabled) return;
-          const hex = e.dataTransfer.getData(DRAG_TYPE);
-          if (hex) {
-            e.preventDefault();
-            onChange((value + hex).toUpperCase());
-          }
-          setDragOver(false);
-        }}
-      />
-      {abbr && <span className="text-sm text-gray-500 dark:text-gray-400 font-mono">{abbr}</span>}
     </div>
   );
 }
@@ -186,7 +71,6 @@ export function TransmissionModeSettingsDialog({
   settings,
   onSave,
 }: TransmissionModeSettingsDialogProps) {
-  const { viewDensity } = useCompactMode();
   const [local, setLocal] = useState<TransmissionModeSettings>(settings);
   // Validation error message + the set of invalid field keys (for red highlight).
   // Mirrors Java *ModeSettingsDialog, which blocks OK and highlights bad fields.
@@ -206,20 +90,38 @@ export function TransmissionModeSettingsDialog({
     }
   }
 
-  function set<K extends keyof TransmissionModeSettings>(key: K, val: TransmissionModeSettings[K]) {
-    setLocal((prev) => ({ ...prev, [key]: val }));
-    // Clear the highlight + error for a field once the user edits it.
+  /**
+   * Apply a partial edit to the draft; clears the highlight (and the error
+   * line) for the fields the edit actually changed. This is also the onChange
+   * contract handed to the mode's SettingsSection.
+   */
+  function patch(p: Partial<TransmissionModeSettings>) {
+    const changed = new Set<string>();
+    for (const [key, value] of Object.entries(p)) {
+      if (key === "extra") {
+        const nextExtra = value as Record<string, string>;
+        for (const k of Object.keys(nextExtra)) {
+          if (nextExtra[k] !== local.extra[k]) changed.add(k);
+        }
+      } else if (value !== local[key as keyof TransmissionModeSettings]) {
+        changed.add(key);
+      }
+    }
+    setLocal((prev) => ({ ...prev, ...p }));
+    if (changed.size === 0) return;
     setInvalidFields((prev) => {
-      if (!prev.has(key)) return prev;
       const next = new Set(prev);
-      next.delete(key);
-      return next;
+      for (const key of changed) next.delete(key);
+      return next.size === prev.size ? prev : next;
     });
     setError(null);
   }
 
-  const isMLLP = local.transmissionMode === "MLLP";
-  const title = isMLLP ? "MLLP Settings" : "Basic Settings";
+  const def = TRANSMISSION_MODE_REGISTRY.find((m) => m.name === local.transmissionMode);
+  // The mode-specific block below the shared SOM/EOM rows (MLLP's MLLPv2
+  // fields, a runtime mode's declared fields). Absent for Basic.
+  const ModeSection = def?.SettingsSection;
+  const title = `${local.transmissionMode} Settings`;
 
   return (
     <FormDialog
@@ -230,7 +132,6 @@ export function TransmissionModeSettingsDialog({
       maxWidth="sm:max-w-3xl"
       error={error}
       onSubmit={() => {
-        const def = TRANSMISSION_MODE_REGISTRY.find((m) => m.name === local.transmissionMode);
         const errs = def?.validate?.(local) ?? [];
         if (errs.length > 0) {
           // Block close and surface the errors (parity with Java's JOptionPane).
@@ -247,98 +148,62 @@ export function TransmissionModeSettingsDialog({
         {/* ── Left: form fields ──────────────────────────────────────────── */}
         <div className="flex-1 min-w-0 border border-border rounded p-3">
           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
-            {isMLLP ? "MLLP Settings" : "Basic Settings"}
+            {title}
           </p>
 
           <HexFieldRow
             label="Start of Message Bytes:"
             value={local.startOfMessageBytes}
-            onChange={(v) => set("startOfMessageBytes", v)}
+            onChange={(v) => patch({ startOfMessageBytes: v })}
             invalid={invalidFields.has("startOfMessageBytes")}
           />
           <HexFieldRow
             label="End of Message Bytes:"
             value={local.endOfMessageBytes}
-            onChange={(v) => set("endOfMessageBytes", v)}
+            onChange={(v) => patch({ endOfMessageBytes: v })}
             invalid={invalidFields.has("endOfMessageBytes")}
           />
 
-          {isMLLP && (
-            <>
-              <div className="flex items-center gap-3 py-1.5">
-                <span className="w-48 text-sm text-right text-gray-700 dark:text-gray-300 shrink-0">
-                  Use MLLPv2:
-                </span>
-                <RadioGroup
-                  name="tm-dialog-mllpv2"
-                  value={local.useMLLPv2 ? "yes" : "no"}
-                  onChange={(v) => set("useMLLPv2", v === "yes")}
-                  options={[
-                    { label: "Yes", value: "yes" },
-                    { label: "No", value: "no" },
-                  ]}
-                  title="Select Yes to use MLLPv2 (bi-directional acknowledgements)."
-                />
-              </div>
-
-              <HexFieldRow
-                label="Commit ACK Bytes:"
-                value={local.ackBytes}
-                onChange={(v) => set("ackBytes", v)}
-                disabled={!local.useMLLPv2}
-                invalid={invalidFields.has("ackBytes")}
-              />
-              <HexFieldRow
-                label="Commit NACK Bytes:"
-                value={local.nackBytes}
-                onChange={(v) => set("nackBytes", v)}
-                disabled={!local.useMLLPv2}
-                invalid={invalidFields.has("nackBytes")}
-              />
-
-              <div className="flex items-center gap-3 py-1.5">
-                <span className="w-48 text-sm text-right text-gray-700 dark:text-gray-300 shrink-0">
-                  Max Retry Count:
-                </span>
-                <NumberInput
-                  value={local.maxRetries}
-                  onChange={(maxRetries) => set("maxRetries", maxRetries)}
-                  disabled={!local.useMLLPv2}
-                  className={`${inputCls(viewDensity)} w-20 ${
-                    invalidFields.has("maxRetries") ? inputErrorCls : ""
-                  }`}
-                />
-              </div>
-            </>
+          {ModeSection && (
+            <ModeSection settings={local} onChange={patch} invalidFields={invalidFields} />
           )}
         </div>
 
         {/* ── Right: Byte Abbreviations reference ─────────────────────────── */}
-        <div className="w-40 shrink-0 border border-border rounded p-2">
+        <div className="w-40 shrink-0 flex flex-col min-h-72 border border-border rounded p-2">
           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1 text-center">
             Byte Abbreviations
           </p>
-          <div className="max-h-72 overflow-y-auto">
-            <ul className="divide-y divide-border">
-              {BYTE_ABBREVIATIONS.map(({ hex, abbr }) => (
-                <li
-                  key={hex}
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData(DRAG_TYPE, hex);
-                    e.dataTransfer.effectAllowed = "copy";
-                  }}
-                  className="flex hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-grab active:cursor-grabbing select-none"
-                >
-                  <span className="py-0.5 px-1 text-gray-500 dark:text-gray-400 font-mono w-10">
-                    {hex}
-                  </span>
-                  <span className="py-0.5 px-1 text-gray-700 dark:text-gray-300 font-mono">
-                    {abbr.length === 1 ? abbr : `<${abbr}>`}
-                  </span>
-                </li>
-              ))}
-            </ul>
+          {/* The list fills the row's height instead of a fixed cap, so a mode with
+              many declared fields (ASTM has nine) doesn't leave dead space below it,
+              while min-h-72 on the column keeps a short mode (Basic declares none)
+              from collapsing it. The scroller is absolutely positioned on purpose:
+              flex-1 alone would let its 128 rows of content drive the row height —
+              the dialog grew to ~3700px and stopped scrolling — so it must be taken
+              out of flow and sized by the column instead.. */}
+          <div className="relative flex-1">
+            <div className="absolute inset-0 overflow-y-auto">
+              <ul className="divide-y divide-border">
+                {BYTE_ABBREVIATIONS.map(({ hex, abbr }) => (
+                  <li
+                    key={hex}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData(HEX_BYTE_DRAG_TYPE, hex);
+                      e.dataTransfer.effectAllowed = "copy";
+                    }}
+                    className="flex hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-grab active:cursor-grabbing select-none"
+                  >
+                    <span className="py-0.5 px-1 text-gray-500 dark:text-gray-400 font-mono w-10">
+                      {hex}
+                    </span>
+                    <span className="py-0.5 px-1 text-gray-700 dark:text-gray-300 font-mono">
+                      {abbr.length === 1 ? abbr : `<${abbr}>`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
         </div>
       </div>

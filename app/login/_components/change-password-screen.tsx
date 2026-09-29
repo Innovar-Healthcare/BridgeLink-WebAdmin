@@ -10,7 +10,13 @@ import type { User } from "@/lib/types";
 interface Props {
   user: User;
   gracePeriodMsg: string;
-  onSuccess: () => void;
+  /**
+   * May be async: the grace-period handler makes further calls once the server
+   * has lifted the session restriction. It is awaited inside the submitting
+   * state so the form cannot be resubmitted while that runs — a second password
+   * PUT would risk a spurious reuse-policy error and a duplicate audit event.
+   */
+  onSuccess: () => void | Promise<void>;
   onLogout: () => void;
 }
 
@@ -34,7 +40,7 @@ export function ChangePasswordScreen({ user, gracePeriodMsg, onSuccess, onLogout
         setError(errors.join(" "));
         return;
       }
-      onSuccess();
+      await onSuccess();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update password.");
     } finally {
@@ -45,7 +51,13 @@ export function ChangePasswordScreen({ user, gracePeriodMsg, onSuccess, onLogout
   return (
     <form onSubmit={handleSubmit} className="p-8 space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Password Expired</h2>
+        {/* Neutral on purpose: the server routes both an expired password and one
+            that no longer meets the composition rules into this screen, and only
+            the message below knows which. "Password Expired" was wrong for the
+            second case. */}
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+          Change Your Password
+        </h2>
         {gracePeriodMsg && (
           <p className="mt-2 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded px-3 py-2">
             {gracePeriodMsg}

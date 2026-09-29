@@ -23,6 +23,7 @@ import type { Channel, ChannelGroup, CodeTemplate, CodeTemplateLibrary } from "@
 import { DEFAULT_GROUP_ID } from "../_lib/channel-columns";
 import { useChannelGroupSave } from "../_lib/use-channel-group-save";
 import { applyImportedChannelDependencies } from "../_lib/apply-imported-dependencies";
+import { checkFileSize } from "@/lib/file-size-guard";
 import {
   buildImportedGroupSet,
   classifyChannelImport,
@@ -310,6 +311,11 @@ export function ImportGroupDialog({
   async function handleFileSelected() {
     if (!file) return;
     setError(null);
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      setError(tooLarge);
+      return;
+    }
     setLoading(true);
     try {
       const text = await file.text();

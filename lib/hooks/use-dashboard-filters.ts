@@ -64,6 +64,20 @@ export function useDashboardFilters(
     [allGroups, deployedChannelIds]
   );
 
+  // Names for every group, not just the ones offered above. A group filter is keyed by id,
+  // so a still-existing group whose channels are all undeployed drops out of `groupOptions`
+  // while staying selected — this keeps it readable instead of showing a bare UUID.
+  const groupNames = useMemo(
+    () =>
+      new Map(
+        allGroups.map((g) => [
+          g.id,
+          g.id === DEFAULT_GROUP_ID ? DEFAULT_GROUP_NAME : (g.name ?? g.id),
+        ])
+      ),
+    [allGroups]
+  );
+
   // ── Derived filter sets ─────────────────────────────────────────────────
   const groupFilteredIds = useMemo<Set<string> | null>(() => {
     if (selectedGroupIds.size === 0) return null;
@@ -115,6 +129,7 @@ export function useDashboardFilters(
     setTagMode,
     tagOptions,
     groupOptions,
+    groupNames,
     anyFilter,
     filteredStatuses,
   };

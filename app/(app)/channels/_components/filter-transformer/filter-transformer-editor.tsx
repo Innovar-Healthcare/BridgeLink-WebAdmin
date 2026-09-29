@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo, useLayoutEffect } from "react";
 import {
   ArrowLeft,
   Plus,
@@ -38,6 +38,9 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { checkFileSize } from "@/lib/file-size-guard";
+import type { FtDeepLink } from "../channel-editor-types";
+import { PendingRevealContext, type PendingRevealHandle } from "./pending-reveal-context";
 
 export type { DestInfo };
 
@@ -79,6 +82,12 @@ interface Props {
    * is locked. Set when the source connector requires a specific inbound type.
    */
   sourceInboundLocked?: boolean;
+  /**
+   * Config Search deep link: preselect this element and, if it has a
+   * script, reveal this line in its editor. Applied once at mount; a path that
+   * no longer resolves is ignored rather than guessed at.
+   */
+  initialSelection?: FtDeepLink;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -98,12 +107,27 @@ export function FilterTransformerEditor({
   channelName,
   autoValidate,
   sourceInboundLocked,
+  initialSelection,
 }: Props) {
   const { viewDensity } = useCompactMode();
   const rowPy =
     viewDensity === "comfortable" ? "py-1.5" : viewDensity === "compact" ? "py-0.5" : "py-1";
   const barPy =
     viewDensity === "comfortable" ? "py-2" : viewDensity === "compact" ? "py-1" : "py-1.5";
+
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // A deep link can name step 14 of 20, which the element list renders below the
+  // fold — selected but invisible, which reads as "the link did nothing".
+  // Mount-only in practice: `initialSelection` is held in state upstream, so its
+  // identity is stable for the life of this overlay.
+  useLayoutEffect(() => {
+    const path = initialSelection?.path;
+    if (!path?.length) return;
+    rootRef.current
+      ?.querySelector(`[data-testid="ft-element-${path.join("-")}"]`)
+      ?.scrollIntoView({ block: "center" });
+  }, [initialSelection]);
 
   const [dontShowAgain, setDontShowAgain] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -119,6 +143,11 @@ export function FilterTransformerEditor({
     if (!file) return;
     // Reset so the same file can be re-selected
     e.target.value = "";
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      setImportError(tooLarge);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (ev) => {
       const content = ev.target?.result as string;
@@ -147,6 +176,7 @@ export function FilterTransformerEditor({
     elements,
     displayItems,
     selectedItem,
+    initialSelectionApplied,
     generatedScript,
     availableVariables,
     availableTypes,
@@ -210,7 +240,38 @@ export function FilterTransformerEditor({
     transformerXml,
     onTransformerChange,
     autoValidate,
+    initialSelection,
   });
+
+  /**
+   * One-shot line reveal for a Config Search deep link. A ref, not
+   * state: reading it must not re-render, and it has to survive the detail
+   * pane's remount-per-selection. `take()` runs from Monaco's onMount, never
+   * during render.
+   *
+   * Armed only when the deep link actually selected a JavaScript element — the
+   * one case where a JavaScriptPanel mounts to consume it. Left armed after a
+   * path that did not resolve (the step was deleted or reordered since the
+   * search index was built), or that landed on a Mapper or an opaque plugin
+   * element, the line would instead be taken by the first JavaScript step the
+   * user clicked afterwards: caret jump and search highlight on code that never
+   * matched anything.
+   */
+  const pendingRevealLineRef = useRef<number | null>(
+    initialSelectionApplied && selectedItem?.type === "JavaScript"
+      ? (initialSelection?.line ?? null)
+      : null
+  );
+  const pendingReveal = useMemo<PendingRevealHandle>(
+    () => ({
+      take: () => {
+        const line = pendingRevealLineRef.current;
+        pendingRevealLineRef.current = null;
+        return line == null ? null : { line };
+      },
+    }),
+    []
+  );
 
   const {
     leftPanelWidth,
@@ -381,7 +442,6 @@ export function FilterTransformerEditor({
         <BottomGeneratedScript
           script={generatedScript}
           elementLabel={selectedItem.name || selectedItem.type}
-          isDark={isDark}
         />
       )}
     </div>
@@ -448,8 +508,8 @@ export function FilterTransformerEditor({
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <>
-      <div className="flex flex-col h-full bg-white dark:bg-gray-900">
+    <PendingRevealContext.Provider value={pendingReveal}>
+      <div ref={rootRef} className="flex flex-col h-full bg-white dark:bg-gray-900">
         {/* ── Header ─────────────────────────────────────────────────────────── */}
         <div
           className={`flex items-center gap-3 px-4 ${viewDensity === "comfortable" ? "py-2.5" : barPy} border-b border-border bg-white dark:bg-gray-900 shrink-0`}
@@ -1010,6 +1070,6 @@ export function FilterTransformerEditor({
           </DialogContent>
         </Dialog>
       )}
-    </>
+    </PendingRevealContext.Provider>
   );
 }

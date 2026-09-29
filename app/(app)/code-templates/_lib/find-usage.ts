@@ -12,7 +12,7 @@ import type { CodeTemplate, CodeTemplateLibrary } from "@/lib/types";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface ScriptLocation {
-  /** Human-readable label, e.g. "Preprocessing Script", "Source — Transformer — Step 1" */
+  /** Human-readable label, e.g. "Preprocessor Script", "Source — Transformer — Step 1" */
   label: string;
   /** Short snippet showing the function call in context */
   snippet: string;
@@ -67,12 +67,12 @@ export function extractScriptsFromChannelXml(xml: string): NamedScript[] {
   const channelScripts: Array<{ selector: string; label: string; scriptKey: string }> = [
     {
       selector: "channel > preprocessingScript",
-      label: "Preprocessing Script",
+      label: "Preprocessor Script",
       scriptKey: "preprocessing",
     },
     {
       selector: "channel > postprocessingScript",
-      label: "Postprocessing Script",
+      label: "Postprocessor Script",
       scriptKey: "postprocessing",
     },
     { selector: "channel > deployScript", label: "Deploy Script", scriptKey: "deploy" },

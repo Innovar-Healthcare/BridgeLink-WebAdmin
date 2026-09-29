@@ -426,7 +426,6 @@ function DelimitedPropertiesSection({
   onChange,
   side,
   transformerType,
-  isDark,
   channelId,
   version,
 }: DataTypePropertiesSectionProps) {
@@ -764,7 +763,6 @@ function DelimitedPropertiesSection({
             setBatchScript(v);
             updateText("batchProperties > batchScript", v);
           }}
-          isDark={isDark}
           channelId={channelId}
           contextType="CHANNEL_BATCH"
         />

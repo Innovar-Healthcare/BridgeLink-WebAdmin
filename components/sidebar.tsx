@@ -29,13 +29,14 @@ import {
   ExternalLink,
   Info,
   Bug,
+  Lock,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { logout } from "@/lib/api-client";
 import { getSession } from "@/lib/auth";
 import { clearClientCaches } from "@/lib/logout";
 import { pluginRegistry } from "@/lib/plugin-registry";
-import { usePluginSurfaceEnabled } from "@/lib/plugin-gating";
+import { usePluginSurfaceEnabled, usePluginSurfaceLocked } from "@/lib/plugin-gating";
 import { useDrawer } from "@/lib/hooks/use-drawer";
 import { useMounted } from "@/lib/hooks/use-mounted";
 import { useTheme } from "@/lib/hooks/use-theme";
@@ -65,6 +66,12 @@ interface NavItem {
   openAs?: "page" | "drawer";
   /** Slug used to open/identify the drawer (same as href slug). */
   slug?: string;
+  /**
+   * Installed and enabled on the server, but not licensed. The item stays in the nav
+   * and routes to the LockedFeature upgrade prompt, so it is rendered muted with a lock rather
+   * than looking like a working page.
+   */
+  locked?: boolean;
 }
 
 // Permission keys for the static built-in settings tabs (always present, no plugin dependency).
@@ -231,7 +238,17 @@ export function Sidebar({ updateAvailable = false, onUpdateClick }: SidebarProps
   const { hasPermission } = usePermissions();
   const { activeSlug, openDrawer } = useDrawer();
   const surfaceEnabled = usePluginSurfaceEnabled();
+  const surfaceLocked = usePluginSurfaceLocked();
   const [aboutOpen, setAboutOpen] = useState(false);
+
+  // Shared by the density button's tooltip and its aria-label so the accessible
+  // name always matches the visible one.
+  const densityLabel =
+    viewDensity === "comfortable"
+      ? "Comfortable density"
+      : viewDensity === "compact"
+        ? "Compact density"
+        : "Default density";
 
   // Only read sessionStorage after mount to avoid SSR/hydration mismatch
   const session = mounted ? getSession() : null;
@@ -253,16 +270,26 @@ export function Sidebar({ updateAvailable = false, onUpdateClick }: SidebarProps
   // Merge registered plugin pages into nav groups
   const navGroups: NavGroup[] = NAV_GROUPS.map((group) => {
     const pluginItems: NavItem[] = pluginRegistry.pages
-      .filter((p) => (p.navGroup ?? "Operations") === group.label && surfaceEnabled(p))
-      .map((p) => ({
-        label: p.label,
-        href: `/p/${p.slug}`,
-        icon: p.icon,
-        tooltip: p.tooltip,
-        permissionKey: p.permissionKey,
-        openAs: p.openAs,
-        slug: p.slug,
-      }));
+      // Keep an installed-but-unlicensed page in the nav so it can land on
+      // the LockedFeature upgrade prompt. Filtering it out here would make a licensed
+      // add-on indistinguishable from one the server does not have installed.
+      .filter(
+        (p) =>
+          (p.navGroup ?? "Operations") === group.label && (surfaceEnabled(p) || surfaceLocked(p))
+      )
+      .map((p) => {
+        const isLocked = surfaceLocked(p);
+        return {
+          label: p.label,
+          href: `/p/${p.slug}`,
+          icon: p.icon,
+          tooltip: isLocked ? `${p.tooltip} (licensed feature — upgrade to unlock)` : p.tooltip,
+          permissionKey: p.permissionKey,
+          openAs: p.openAs,
+          slug: p.slug,
+          locked: isLocked,
+        };
+      });
     return pluginItems.length > 0 ? { ...group, items: [...group.items, ...pluginItems] } : group;
   });
 
@@ -345,7 +372,16 @@ export function Sidebar({ updateAvailable = false, onUpdateClick }: SidebarProps
                 )}
                 {collapsed && groupIdx > 0 && <div className="pt-1" />}
                 {visibleItems.map(
-                  ({ label: itemLabel, href, icon: Icon, tooltip, external, openAs, slug }) => {
+                  ({
+                    label: itemLabel,
+                    href,
+                    icon: Icon,
+                    tooltip,
+                    external,
+                    openAs,
+                    slug,
+                    locked,
+                  }) => {
                     if (external) {
                       const serverBase = session?.serverUrl?.replace(/\/$/, "") ?? "";
                       const fullUrl = href.startsWith("http")
@@ -359,6 +395,7 @@ export function Sidebar({ updateAvailable = false, onUpdateClick }: SidebarProps
                           href={fullUrl}
                           target="_blank"
                           rel="noopener noreferrer"
+                          aria-label={itemLabel}
                           className={cn(
                             "flex items-center text-sm transition-colors group text-gray-300 hover:bg-[#2a4a7a] hover:text-white",
                             collapsed ? "justify-center py-2.5 px-0" : "gap-2.5 px-4 py-2"
@@ -396,6 +433,7 @@ export function Sidebar({ updateAvailable = false, onUpdateClick }: SidebarProps
                         <button
                           key={href}
                           onClick={() => openDrawer(slug)}
+                          aria-label={itemLabel}
                           className={cn(
                             "flex items-center text-sm transition-colors group w-full",
                             collapsed ? "justify-center py-2.5 px-0" : "gap-2.5 px-4 py-2",
@@ -443,19 +481,23 @@ export function Sidebar({ updateAvailable = false, onUpdateClick }: SidebarProps
                               }
                             : undefined
                         }
+                        aria-label={locked ? `${itemLabel} (licensed feature)` : itemLabel}
                         className={cn(
                           "flex items-center text-sm transition-colors group",
                           collapsed ? "justify-center py-2.5 px-0" : "gap-2.5 px-4 py-2",
                           active
                             ? "bg-[#F78D2D] text-white"
-                            : "text-gray-300 hover:bg-[#2a4a7a] hover:text-white"
+                            : locked
+                              ? "text-gray-400/70 hover:bg-[#2a4a7a] hover:text-gray-200"
+                              : "text-gray-300 hover:bg-[#2a4a7a] hover:text-white"
                         )}
                       >
                         <Icon className="w-4 h-4 shrink-0" />
                         {!collapsed && (
                           <>
                             <span className="flex-1 truncate">{itemLabel}</span>
-                            {active && <ChevronRight className="w-3 h-3 opacity-60" />}
+                            {locked && <Lock className="w-3 h-3 shrink-0 opacity-70" />}
+                            {active && !locked && <ChevronRight className="w-3 h-3 opacity-60" />}
                           </>
                         )}
                       </Link>
@@ -488,6 +530,11 @@ export function Sidebar({ updateAvailable = false, onUpdateClick }: SidebarProps
                             setAboutOpen(true);
                           }
                         }}
+                        aria-label={
+                          updateAvailable
+                            ? "About BridgeLink — update available"
+                            : "About BridgeLink"
+                        }
                         className={cn(
                           "flex items-center text-sm transition-colors group text-gray-300 hover:bg-[#2a4a7a] hover:text-white w-full",
                           collapsed ? "justify-center py-2.5 px-0" : "gap-2.5 px-4 py-2"
@@ -550,6 +597,7 @@ export function Sidebar({ updateAvailable = false, onUpdateClick }: SidebarProps
                 <TooltipTrigger asChild>
                   <button
                     onClick={handleLogout}
+                    aria-label="Logout"
                     className="p-1.5 text-gray-300 hover:text-white transition-colors rounded"
                   >
                     <LogOut className="w-4 h-4" />
@@ -580,6 +628,7 @@ export function Sidebar({ updateAvailable = false, onUpdateClick }: SidebarProps
                 <TooltipTrigger asChild>
                   <button
                     onClick={cycleDensity}
+                    aria-label={densityLabel}
                     className="p-1 text-gray-400 hover:text-white transition-colors rounded"
                   >
                     {viewDensity === "comfortable" ? (
@@ -592,17 +641,14 @@ export function Sidebar({ updateAvailable = false, onUpdateClick }: SidebarProps
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="right" sideOffset={8}>
-                  {viewDensity === "comfortable"
-                    ? "Comfortable density"
-                    : viewDensity === "compact"
-                      ? "Compact density"
-                      : "Default density"}
+                  {densityLabel}
                 </TooltipContent>
               </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
                     onClick={toggle}
+                    aria-label={isDark ? "Light mode" : "Dark mode"}
                     className="p-1 text-gray-400 hover:text-white transition-colors rounded"
                   >
                     {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}

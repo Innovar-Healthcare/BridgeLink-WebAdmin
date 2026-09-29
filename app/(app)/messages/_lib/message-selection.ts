@@ -1,5 +1,6 @@
 import { getMessage, auditAccessedPHIMessage } from "@/lib/api-client";
 import type { Message, ConnectorMessage } from "@/lib/types";
+import { getCachedMessage, putCachedMessage } from "./message-cache";
 
 export interface ConnectorSwitchDeps {
   seqRef: { current: number };
@@ -55,6 +56,12 @@ export interface MessageSelectionDeps {
   setFullMessage: (msg: Message | null) => void;
   setContentError: (err: string) => void;
   setContentLoading: (loading: boolean) => void;
+  /** The pinned search filter's includedMetaDataIds (Java: selectedMetaDataIds =
+   *  messageFilter.getIncludedMetaDataIds(), MessageBrowser.java:652) — restricts a cache-miss
+   *  fetch to the searched connectors, mirroring getMessageContent(channelId, messageId,
+   *  selectedMetaDataIds) (MessageBrowser.java:1930-1932). Only the included side; Java never
+   *  resolves excludedMetaDataIds for this call. */
+  includedMetaDataIds?: number[];
 }
 
 /**
@@ -62,6 +69,10 @@ export interface MessageSelectionDeps {
  * selected message. All state writes are guarded by `seq` so that slow in-flight
  * fetches triggered by a prior selection are silently discarded when the user has
  * already moved to a different message.
+ *
+ * A 200-entry LRU cache (message-cache.ts) is checked first, mirroring Java's messageCache
+ * (MessageBrowser.java:1858-1887) — the audit still runs unconditionally on both a hit and a
+ * miss (Java's audit block at MessageBrowser.java:1908-1918 is outside the cache-miss branch).
  *
  * Callers must:
  *   1. Increment `seqRef.current` and capture the new value as `seq`.
@@ -81,11 +92,14 @@ export async function selectMessageContent(
     setFullMessage,
     setContentError,
     setContentLoading,
+    includedMetaDataIds,
   } = deps;
 
   try {
-    const full = await getMessage(msg.channelId, msg.messageId);
+    const cached = getCachedMessage(msg.messageId);
+    const full = cached ?? (await getMessage(msg.channelId, msg.messageId, includedMetaDataIds));
     if (seqRef.current !== seq) return; // stale — user clicked a different message
+    if (!cached) putCachedMessage(msg.messageId, full);
 
     // ── CURES PHI audit: "Accessed PHI" (Java MessageBrowser:1908-1918) ──
     // Audit must succeed before content is shown; failure withholds PHI.
@@ -135,6 +149,8 @@ export interface SelectConnectorDeps {
   setFullMessage: (msg: Message | null) => void;
   setContentError: (err: string) => void;
   setContentLoading: (loading: boolean) => void;
+  /** See MessageSelectionDeps.includedMetaDataIds. */
+  includedMetaDataIds?: number[];
 }
 
 /**
@@ -187,5 +203,6 @@ export async function selectConnector(
     setFullMessage: deps.setFullMessage,
     setContentError: deps.setContentError,
     setContentLoading: deps.setContentLoading,
+    includedMetaDataIds: deps.includedMetaDataIds,
   });
 }

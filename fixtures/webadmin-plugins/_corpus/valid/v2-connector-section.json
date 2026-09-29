@@ -1,0 +1,80 @@
+{
+  "manifestVersion": 2,
+  "connectorPanels": [
+    {
+      "mode": "destination",
+      "transportName": "Corpus Sender",
+      "sections": [
+        {
+          "title": "Corpus Sender Settings",
+          "fields": [{ "key": "endpointUrl", "type": "text", "label": "Endpoint URL" }]
+        }
+      ]
+    }
+  ],
+  "connectorSections": [
+    {
+      "mode": "source",
+      "name": "Corpus Audit",
+      "propertiesClass": "com.example.corpus.CorpusAuditPluginProperties",
+      "appliesTo": ["HTTP Listener", "Corpus Sender"],
+      "sections": [
+        {
+          "title": "Corpus Audit",
+          "fields": [
+            {
+              "key": "auditEnabled",
+              "type": "checkbox",
+              "label": "Enable Auditing",
+              "defaultValue": "false"
+            },
+            {
+              "key": "auditEndpoint",
+              "type": "text",
+              "label": "Audit Endpoint",
+              "visibleWhen": { "field": "auditEnabled", "op": "truthy" },
+              "validation": [
+                { "rule": "required" },
+                { "rule": "pattern", "pattern": "^[a-z0-9.:/-]+$", "message": "Invalid endpoint" }
+              ]
+            },
+            {
+              "key": "secureChannel",
+              "type": "checkbox",
+              "label": "Secure Channel",
+              "defaultValue": "false"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "Test Audit Endpoint",
+          "endpoint": "/extensions/corpus-ext/audit/test",
+          "method": "POST"
+        }
+      ],
+      "securesTransportWhen": { "field": "secureChannel", "op": "truthy" }
+    },
+    {
+      "mode": "destination",
+      "name": "Corpus Audit Destination",
+      "propertiesClass": "com.example.corpus.CorpusAuditPluginProperties",
+      "appliesTo": ["HTTP Sender"],
+      "sections": [
+        {
+          "title": "Corpus Audit",
+          "fields": [
+            {
+              "key": "auditEnabled",
+              "type": "checkbox",
+              "label": "Enable Auditing",
+              "defaultValue": "false"
+            }
+          ]
+        }
+      ],
+      "securesTransportWhen": true
+    }
+  ]
+}

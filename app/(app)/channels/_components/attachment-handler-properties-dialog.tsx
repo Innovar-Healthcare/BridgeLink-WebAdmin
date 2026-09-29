@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { useCompactMode, densityHeight } from "@/lib/hooks/use-compact-mode";
 import { MONACO_DIALOG_CENTER_STYLE } from "@/lib/hooks/use-monaco-overflow-host";
-import type { AttachmentHandlerState, AttachmentCommitResult } from "../_lib/channel-xml";
+import type { AttachmentHandlerState, AttachmentCommitFn } from "../_lib/channel-xml";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { RegexBody } from "./attachment-handler/regex-body";
 import { JavaScriptBody } from "./attachment-handler/javascript-body";
@@ -49,6 +49,8 @@ export function AttachmentHandlerPropertiesDialog({
   // Working copy — reset when dialog opens
   const [local, setLocal] = useState<AttachmentHandlerState>(attachmentHandler);
   const [footerError, setFooterError] = useState<string | null>(null);
+  // Save is now a server round-trip for the JavaScript body; disable while in flight.
+  const [committing, setCommitting] = useState(false);
 
   // Soft-block warning awaiting a "Save anyway?" confirm (Custom/JavaScript bodies).
   const [pendingWarning, setPendingWarning] = useState<{
@@ -60,7 +62,7 @@ export function AttachmentHandlerPropertiesDialog({
   const [footerLeft, setFooterLeft] = useState<React.ReactNode>(null);
 
   // Ref passed to JS body so it can register a commit function (avoids prop drilling)
-  const commitRef = useRef<() => AttachmentCommitResult>(() => local);
+  const commitRef = useRef<AttachmentCommitFn>(async () => local);
 
   useEffect(() => {
     if (open) {
@@ -77,19 +79,27 @@ export function AttachmentHandlerPropertiesDialog({
     onOpenChange(false);
   }
 
-  function handleSave() {
-    const result = commitRef.current();
-    if ("error" in result) {
-      setFooterError(result.error);
-      return;
+  async function handleSave() {
+    setCommitting(true);
+    setFooterError(null);
+    try {
+      const result = await commitRef.current();
+      if ("error" in result) {
+        setFooterError(result.error);
+        return;
+      }
+      if ("warning" in result) {
+        // Soft block — prompt "Save anyway?" rather than refusing #45).
+        setPendingWarning(result);
+        return;
+      }
+      commitAndClose(result);
+    } catch (e) {
+      // A validation round-trip can fail; surface it instead of a dead Save button.
+      setFooterError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCommitting(false);
     }
-    if ("warning" in result) {
-      // Soft block — prompt "Save anyway?" rather than refusing #45).
-      setFooterError(null);
-      setPendingWarning(result);
-      return;
-    }
-    commitAndClose(result);
   }
 
   function handleCancel() {
@@ -209,11 +219,13 @@ export function AttachmentHandlerPropertiesDialog({
                   Cancel
                 </button>
                 <button
-                  onClick={handleSave}
+                  onClick={() => void handleSave()}
+                  disabled={committing}
                   className="px-4 py-1.5 text-sm rounded border border-blue-500 bg-blue-500 text-white
-                  hover:bg-blue-600 hover:border-blue-600 transition-colors font-medium"
+                  hover:bg-blue-600 hover:border-blue-600 transition-colors font-medium
+                  disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Save
+                  {committing ? "Saving…" : "Save"}
                 </button>
               </div>
             </div>

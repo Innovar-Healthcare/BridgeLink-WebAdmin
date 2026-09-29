@@ -29,7 +29,22 @@ import { resolveAllowedServer } from "@/lib/server-allowlist";
 import { serverHash } from "@/lib/server-hash";
 import { logServerError } from "@/lib/server-log";
 import { resolveCookieSecure } from "@/lib/cookie-security";
-import { getFixtureShortCircuit, mergeFixtureExtensions } from "@/lib/webadmin-fixtures";
+
+// Dev-only runtime-plugin fixture hooks are loaded through a
+// NODE_ENV-gated dynamic import rather than a static one. The fixture module
+// performs filesystem reads with a path derived from an env var, which Next's
+// file tracer cannot resolve statically — a STATIC import of it makes nft fall
+// back to tracing the entire project root into .next/standalone, shipping raw
+// source (including the commercial plugins/ overlay) to customers. In a
+// production build `process.env.NODE_ENV === "production"` folds to a constant,
+// the dynamic import() below becomes unreachable, and the module — with its
+// tracer-poisoning fs calls — is dropped from the route graph entirely. The
+// outputFileTracingExcludes guardrail in next.config.ts backs this up.
+type FixtureModule = typeof import("@/lib/webadmin-fixtures");
+async function loadFixtures(): Promise<FixtureModule | null> {
+  if (process.env.NODE_ENV === "production") return null;
+  return import("@/lib/webadmin-fixtures");
+}
 
 // Minimum body size (bytes) before it's worth gzipping. Below ~1 KB the
 // compression headers + CPU overhead outweigh the savings.
@@ -124,9 +139,11 @@ async function handler(req: NextRequest, { params }: { params: Promise<{ path: s
 
   // Dev-only runtime-plugin fixture mode: answer the webadmin
   // manifest/defaults/action endpoints from BL_WEBADMIN_PLUGINS_FIXTURE_DIR
-  // instead of the server. Instant null (zero overhead) when the mode is off,
-  // and never active in production builds.
-  const fixture = await getFixtureShortCircuit(req.method, pathStr, search);
+  // instead of the server. null (and never loaded) in production builds.
+  const fixtures = await loadFixtures();
+  const fixture = fixtures
+    ? await fixtures.getFixtureShortCircuit(req.method, pathStr, search)
+    : null;
   if (fixture) {
     // 204 must not carry a body (matches the null-body handling below).
     return new NextResponse(fixture.status === 204 ? null : fixture.body, {
@@ -189,7 +206,9 @@ async function handler(req: NextRequest, { params }: { params: Promise<{ path: s
   // into the installed-plugins listing so the existing enablement gating sees
   // them. Null (zero overhead) when the mode is off or the path differs; the
   // tiny merged JSON body skips the gzip streaming path below.
-  const fixtureMerged = await mergeFixtureExtensions(pathStr, upstreamRes);
+  const fixtureMerged = fixtures
+    ? await fixtures.mergeFixtureExtensions(pathStr, upstreamRes)
+    : null;
   if (fixtureMerged) {
     return new NextResponse(fixtureMerged.body, {
       status: fixtureMerged.status,

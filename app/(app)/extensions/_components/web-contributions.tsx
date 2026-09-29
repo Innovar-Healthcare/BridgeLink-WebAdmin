@@ -12,6 +12,7 @@
  * shows a one-line diagnostic so a misconfigured fixture directory is obvious.
  */
 
+import Link from "next/link";
 import { useRuntimePluginStatuses } from "@/lib/runtime-plugins/status-store";
 
 export function WebContributions() {
@@ -26,9 +27,15 @@ export function WebContributions() {
       <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">
         Web Contributions
       </h2>
-      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
         UI contributed by installed extensions through their webadmin manifest.
       </p>
+      <Link
+        href="/developer/manifest-preview"
+        className="text-xs text-blue-600 dark:text-blue-400 hover:underline mb-3 inline-block"
+      >
+        Preview a manifest →
+      </Link>
       {showUnavailableNote ? (
         <p className="text-xs text-gray-500 dark:text-gray-400">
           The webadmin manifest list is unavailable on this server (older Core, or the fixture
@@ -62,7 +69,7 @@ export function WebContributions() {
                 </span>
               ) : status.status === "partial" ? (
                 <span className="text-xs text-amber-700 dark:text-amber-500 min-w-0">
-                  Loaded with conflicts ({status.contributionCount} of{" "}
+                  Partially loaded ({status.contributionCount} of{" "}
                   {status.contributionCount + (status.droppedContributions?.length ?? 0)}{" "}
                   contributions) —{" "}
                   {(status.droppedContributions ?? [])
@@ -72,6 +79,15 @@ export function WebContributions() {
               ) : (
                 <span className="text-xs text-yellow-700 dark:text-yellow-500 min-w-0">
                   Skipped — {status.reason}
+                </span>
+              )}
+              {/* Reserved v2 kinds this build doesn't implement — an expected
+                  version-window outcome, rendered neutrally (never amber: that
+                  color means a contribution was dropped — a registry conflict,
+                  or data type defaults the server could not serve). */}
+              {status.skippedKinds && status.skippedKinds.length > 0 && (
+                <span className="text-xs text-gray-500 dark:text-gray-400 min-w-0">
+                  {status.skippedKinds.map((k) => `${k.kind}: ${k.reason}`).join("; ")}
                 </span>
               )}
             </div>

@@ -30,7 +30,7 @@ import type {
   AttachmentHandlerType,
   AttachmentHandlerState,
 } from "../_lib/channel-xml";
-import { ATTACHMENT_HANDLER_CLASS_NAMES } from "../_lib/channel-xml";
+import { attachmentHandlerTypeForProviderClass } from "../_lib/channel-xml";
 import {
   isReservedMetaDataColumnName,
   METADATA_COLUMN_NAME_MAXLEN,
@@ -719,18 +719,14 @@ export function SummaryTab({
               if (sourceRow) {
                 const plugin = DATA_TYPE_REGISTRY.get(sourceRow.inboundDataType);
                 const defaultClass = plugin?.getDefaultAttachmentHandler?.() ?? null;
-                if (defaultClass !== null) {
-                  const matchedType = (
-                    Object.entries(ATTACHMENT_HANDLER_CLASS_NAMES) as [
-                      AttachmentHandlerType,
-                      string,
-                    ][]
-                  ).find(([, cls]) => cls === defaultClass)?.[0];
-                  if (matchedType) {
-                    onChange({
-                      attachmentHandler: { ...summary.attachmentHandler, type: matchedType },
-                    });
-                  }
+                const matchedType =
+                  defaultClass !== null
+                    ? attachmentHandlerTypeForProviderClass(defaultClass)
+                    : null;
+                if (matchedType) {
+                  onChange({
+                    attachmentHandler: { ...summary.attachmentHandler, type: matchedType },
+                  });
                 }
               }
               setDataTypesDialogOpen(false);

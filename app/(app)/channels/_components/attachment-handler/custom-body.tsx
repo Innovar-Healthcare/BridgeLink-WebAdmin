@@ -3,7 +3,7 @@
 import { type MutableRefObject, useEffect } from "react";
 import { Plus, Trash2, HelpCircle } from "lucide-react";
 import { useCompactMode, densityHeight } from "@/lib/hooks/use-compact-mode";
-import type { AttachmentHandlerState, AttachmentCommitResult } from "../../_lib/channel-xml";
+import type { AttachmentHandlerState, AttachmentCommitFn } from "../../_lib/channel-xml";
 import { customHandlerSaveWarning } from "../../_lib/attachment-validation";
 
 // ─── CustomBody ───────────────────────────────────────────────────────────────
@@ -11,7 +11,7 @@ import { customHandlerSaveWarning } from "../../_lib/attachment-validation";
 interface CustomBodyProps {
   local: AttachmentHandlerState;
   setLocal: (s: AttachmentHandlerState) => void;
-  commitRef: MutableRefObject<() => AttachmentCommitResult>;
+  commitRef: MutableRefObject<AttachmentCommitFn>;
 }
 
 export function CustomBody({ local, setLocal, commitRef }: CustomBodyProps) {
@@ -26,7 +26,9 @@ export function CustomBody({ local, setLocal, commitRef }: CustomBodyProps) {
   // soft warning ("Save anyway?"), not a hard block — Java saves incomplete custom
   // handlers freely #45).
   useEffect(() => {
-    commitRef.current = () => {
+    // Async to satisfy the shared commit contract (the JS body validates server-side); the
+    // custom handler's checks are local (class/property names), so it resolves immediately.
+    commitRef.current = async () => {
       const value = { ...local, customClassName: local.customClassName.trim() };
       const warning = customHandlerSaveWarning(value);
       return warning ? { warning, value } : value;

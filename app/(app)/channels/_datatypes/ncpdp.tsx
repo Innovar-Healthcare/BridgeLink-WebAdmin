@@ -838,7 +838,6 @@ function NCPDPPropertiesSection({
   onChange,
   side,
   transformerType,
-  isDark,
   channelId,
 }: DataTypePropertiesSectionProps) {
   const xml = propsXml ?? "";
@@ -981,7 +980,6 @@ function NCPDPPropertiesSection({
             setBatchScript(v);
             update("batchProperties > batchScript", v);
           }}
-          isDark={isDark}
           channelId={channelId}
           contextType="CHANNEL_BATCH"
         />

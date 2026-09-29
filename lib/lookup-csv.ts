@@ -112,6 +112,22 @@ function csvEscape(input: string): string {
   return input;
 }
 
+// Characters Excel/Sheets/LibreOffice treat as a formula prefix when a CSV cell
+// starts with them (OWASP CSV injection). Lookup CSV round-trips as real data
+// (re-import, and interop with the Java Swing client's ValuePanel format), so
+// unlike lib/download.ts we don't neutralize these — that would silently mutate
+// lookup values on re-import. Callers should warn the operator instead.
+const FORMULA_TRIGGER_CHARS = ["=", "+", "-", "@", "\t", "\r"];
+
+/** True if any key or value would be read as a spreadsheet formula if opened in Excel. */
+export function hasFormulaTriggerValue(values: Record<string, string>): boolean {
+  return Object.entries(values).some(
+    ([key, value]) =>
+      FORMULA_TRIGGER_CHARS.some((c) => key.startsWith(c)) ||
+      FORMULA_TRIGGER_CHARS.some((c) => value.startsWith(c))
+  );
+}
+
 /** Java Swing's filename pattern: all_values_yyyy_MM_dd_HH_mm.csv */
 export function lookupCsvFilename(prefix = "all_values", at: Date = new Date()): string {
   const pad = (n: number) => n.toString().padStart(2, "0");

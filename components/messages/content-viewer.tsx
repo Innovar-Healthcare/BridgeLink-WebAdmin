@@ -1,9 +1,15 @@
 "use client";
 
-import { startTransition, useState, useEffect, useCallback, useMemo } from "react";
+import { startTransition, useState, useEffect, useCallback, useMemo, useRef } from "react";
+import type { OnMount } from "@monaco-editor/react";
+import type * as MonacoType from "monaco-editor";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ConnectorMessage, Message, MessageContent, Attachment } from "@/lib/types";
 import { getMessageAttachments, getAttachment, getDicomMessage } from "@/lib/api-client";
+import {
+  getCachedAttachments,
+  putCachedAttachments,
+} from "@/app/(app)/messages/_lib/message-cache";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ValueDetailDialog } from "@/components/value-detail-dialog";
 import dynamic from "next/dynamic";
@@ -16,9 +22,9 @@ import {
   truncate,
 } from "@/lib/value-format";
 import { MONACO_BASE_OPTIONS } from "@/lib/monaco-defaults";
-import { registerHl7v2Language, hl7v2Theme } from "@/lib/monaco-hl7v2";
+import { registerHl7v2Language } from "@/lib/monaco-hl7v2";
 
-const Editor = dynamic(() => import("@monaco-editor/react").then((m) => m.default), {
+const Editor = dynamic(() => import("@/components/monaco-editor").then((m) => m.MonacoEditor), {
   ssr: false,
   loading: () => (
     <div className="p-4 text-sm text-gray-400 dark:text-gray-500">Loading editor…</div>
@@ -33,7 +39,6 @@ const DicomViewer = dynamic(() => import("./dicom-viewer").then((m) => m.DicomVi
     </div>
   ),
 });
-import { useTheme } from "@/lib/hooks/use-theme";
 import { useCompactMode, type ViewDensity } from "@/lib/hooks/use-compact-mode";
 import { FormCheckbox } from "@/components/ui/form-checkbox";
 import { AttachmentViewerHost } from "./attachment-viewers";
@@ -173,6 +178,45 @@ function unescapeXml(text: string): string {
     .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
 }
 
+/**
+ * Build Monaco injected-text decorations marking each line's real end-of-line
+ * character(s) (\r, \n, or \r\n) — mirrors the Java client's "Show Line
+ * Endings" text-area toggle, used to spot stray \n inside HL7v2
+ * content whose segments are \r-terminated. Computed from the exact string
+ * handed to Monaco (not the model, which normalizes to one EOL style) and
+ * split with the same `\r\n|\r|\n` pattern Monaco itself uses, so line
+ * numbers line up with the model. The last line is skipped since it has no
+ * trailing EOL to label.
+ */
+function computeLineEndingDecorations(
+  text: string,
+  monaco: typeof MonacoType
+): MonacoType.editor.IModelDeltaDecoration[] {
+  const decorations: MonacoType.editor.IModelDeltaDecoration[] = [];
+  const eolPattern = /([^\r\n]*)(\r\n|\r|\n)/g;
+  let match: RegExpExecArray | null;
+  let lineNumber = 1;
+  while ((match = eolPattern.exec(text)) !== null) {
+    const [, lineContent, eol] = match;
+    const label = eol === "\r\n" ? "\\r\\n" : eol === "\r" ? "\\r" : "\\n";
+    const column = lineContent.length + 1;
+    decorations.push({
+      range: new monaco.Range(lineNumber, column, lineNumber, column),
+      options: {
+        after: { content: label, inlineClassName: "bl-eol-marker" },
+        // Monaco doesn't render a decoration whose range has collapsed to
+        // zero width unless told to — and every range here is zero-width by
+        // construction (a point marker, not a span). Without this, the
+        // decoration is registered on the model (visible via
+        // getAllDecorations()) but never painted.
+        showIfCollapsed: true,
+      },
+    });
+    lineNumber++;
+  }
+  return decorations;
+}
+
 /** Extract text content of an XML tag via regex. Returns raw (still XML-escaped) text. */
 function getXmlTagContent(xml: string, tag: string): string {
   const match = xml.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`));
@@ -292,7 +336,7 @@ export function formatSentProperties(xml: string): string {
     else if (s === "webdav") prefix = secure ? "https://" : "http://";
     // FILE (or unknown) → no prefix.
 
-    //: for the local FILE scheme, normalize Windows backslashes to forward
+    // for the local FILE scheme, normalize Windows backslashes to forward
     // slashes so the URI doesn't show mixed separators (e.g. C:\training\out/1.hl7).
     // Leave network hosts untouched (e.g. SMB \\server\share).
     const isFile = s === "file" || s === "";
@@ -485,6 +529,10 @@ export function ContentViewer({
     const stored = localStorage.getItem("bl-editor-wordwrap");
     return stored === null ? true : stored === "true";
   });
+  const [lineEndingsEnabled, setLineEndingsEnabled] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("bl-editor-line-endings") === "true";
+  });
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
 
@@ -498,12 +546,26 @@ export function ContentViewer({
       return;
     }
     let cancelled = false;
+    // Check the same 200-entry LRU the message content uses (message-cache.ts) before
+    // fetching — mirrors Java caching the attachment list alongside the message
+    // (MessageBrowser.java:1859, 1886).
+    const cached = getCachedAttachments(fullMessage.messageId);
+    if (cached) {
+      startTransition(() => {
+        setAttachments(cached);
+        setAttachmentsLoading(false);
+      });
+      return;
+    }
     startTransition(() => {
       setAttachmentsLoading(true);
     });
     getMessageAttachments(fullMessage.channelId, fullMessage.messageId, false)
       .then((atts) => {
-        if (!cancelled) setAttachments(atts ?? []);
+        if (!cancelled) {
+          setAttachments(atts ?? []);
+          putCachedAttachments(fullMessage.messageId, atts ?? []);
+        }
       })
       .catch(() => {
         if (!cancelled) setAttachments([]);
@@ -698,6 +760,11 @@ export function ContentViewer({
                 setWordWrap(v);
                 localStorage.setItem("bl-editor-wordwrap", String(v));
               }}
+              lineEndingsEnabled={lineEndingsEnabled}
+              onLineEndingsChange={(v) => {
+                setLineEndingsEnabled(v);
+                localStorage.setItem("bl-editor-line-endings", String(v));
+              }}
               statusLine={statusLine}
               contentText={displayText}
               responseDataType={responseDataType}
@@ -768,6 +835,8 @@ function MessagesTabContent({
   onFormatChange,
   wordWrap,
   onWordWrapChange,
+  lineEndingsEnabled,
+  onLineEndingsChange,
   statusLine,
   contentText,
   responseDataType,
@@ -779,14 +848,30 @@ function MessagesTabContent({
   onFormatChange: (enabled: boolean) => void;
   wordWrap: boolean;
   onWordWrapChange: (enabled: boolean) => void;
+  lineEndingsEnabled: boolean;
+  onLineEndingsChange: (enabled: boolean) => void;
   statusLine: string;
   contentText: string;
   /** dataType driving Response-body highlighting (see outer component). */
   responseDataType?: string;
 }) {
   const [copied, setCopied] = useState(false);
-  const { isDark } = useTheme();
   const { viewDensity } = useCompactMode();
+  const monacoRef = useRef<typeof MonacoType | null>(null);
+  const decorationsRef = useRef<MonacoType.editor.IEditorDecorationsCollection | null>(null);
+  // A generation counter, not a boolean: the Editor unmounts/remounts whenever
+  // `MessagesTabContent` hits the "no content available" early return between
+  // two content types that do have content (content-viewer.tsx early-return
+  // above), which disposes the old decorations collection. A boolean would
+  // stay `true` across that remount, so the effect below would never re-fire
+  // against the fresh collection and markers would silently stay empty.
+  const [editorGen, setEditorGen] = useState(0);
+
+  const handleEditorMount = useCallback<OnMount>((editor, monaco) => {
+    monacoRef.current = monaco;
+    decorationsRef.current = editor.createDecorationsCollection();
+    setEditorGen((g) => g + 1);
+  }, []);
 
   const isResponseType = RESPONSE_CONTENT_TYPES.includes(activeContentType as ContentTypeKey);
   const formattedText = useMemo(
@@ -808,9 +893,28 @@ function MessagesTabContent({
   // else (mirrors Java MessageBrowser.updateXmlCheckBoxEnabled, which tests the
   // first non-whitespace char of the displayed/deserialized content).
   const formatToggleable = useMemo(() => {
-    const c = contentText.trim();
+    // contentText is typed as string, but Staxon's autoPrimitive can hand back a
+    // number for numeric-looking message content — guard like
+    // formatContent() already does, rather than crashing MessagesTabContent.
+    const c = String(contentText ?? "").trim();
     return c.length > 0 && (c[0] === "<" || c[0] === "{" || c[0] === "[");
   }, [contentText]);
+
+  // Recompute EOL markers whenever the toggle, the displayed text, or the
+  // editor mount generation changes. `editorGen` is needed because Monaco
+  // mounts asynchronously — this effect can run before handleEditorMount
+  // populates the refs, so it must re-fire once that happens, and again on
+  // every later remount (see the comment on `editorGen` above).
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    const decorations = decorationsRef.current;
+    if (!monaco || !decorations) return;
+    if (!lineEndingsEnabled) {
+      decorations.clear();
+      return;
+    }
+    decorations.set(computeLineEndingDecorations(formattedText, monaco));
+  }, [formattedText, lineEndingsEnabled, editorGen]);
 
   const handleCopy = async () => {
     try {
@@ -854,6 +958,13 @@ function MessagesTabContent({
           </button>
           <FormCheckbox label="Wrap" checked={wordWrap} onChange={onWordWrapChange} size="xs" />
           <FormCheckbox
+            label="Line Endings"
+            checked={lineEndingsEnabled}
+            onChange={onLineEndingsChange}
+            size="xs"
+            tooltip="Show the \r, \n, or \r\n at the end of each line."
+          />
+          <FormCheckbox
             label="Format"
             checked={formatEnabled}
             onChange={onFormatChange}
@@ -875,8 +986,8 @@ function MessagesTabContent({
         <Editor
           value={formattedText}
           language={language}
-          theme={language === "hl7v2" ? hl7v2Theme(isDark) : isDark ? "vs-dark" : "vs"}
           beforeMount={registerHl7v2Language}
+          onMount={handleEditorMount}
           options={{
             ...MONACO_BASE_OPTIONS,
             readOnly: true,
@@ -1248,7 +1359,6 @@ function AttachmentsTabContent({
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
   /** Attachment awaiting a viewer choice — drives the AttachmentTypeDialog. */
   const [pickerAtt, setPickerAtt] = useState<Attachment | null>(null);
-  const { isDark } = useTheme();
   const attachmentColConfig = useColumnConfig(
     ATTACHMENT_COLS,
     "bl-content-viewer-attachments-cols-v1"
@@ -1569,9 +1679,6 @@ function AttachmentsTabContent({
                   <Editor
                     value={textValue}
                     language={viewLanguage}
-                    theme={
-                      viewLanguage === "hl7v2" ? hl7v2Theme(isDark) : isDark ? "vs-dark" : "vs"
-                    }
                     beforeMount={registerHl7v2Language}
                     options={{
                       ...MONACO_BASE_OPTIONS,

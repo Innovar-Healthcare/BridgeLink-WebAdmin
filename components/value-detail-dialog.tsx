@@ -11,13 +11,12 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { MONACO_BASE_OPTIONS } from "@/lib/monaco-defaults";
-import { registerHl7v2Language, hl7v2Theme } from "@/lib/monaco-hl7v2";
+import { registerHl7v2Language } from "@/lib/monaco-hl7v2";
 import { useDialogDragResize } from "@/lib/hooks/use-dialog-drag-resize";
-import { useTheme } from "@/lib/hooks/use-theme";
 import { cn } from "@/lib/utils";
 import { detectLanguage, LARGE_VALUE_CHARS, prettyPrintValue } from "@/lib/value-format";
 
-const Editor = dynamic(() => import("@monaco-editor/react").then((m) => m.default), {
+const Editor = dynamic(() => import("@/components/monaco-editor").then((m) => m.MonacoEditor), {
   ssr: false,
   loading: () => (
     <div className="p-4 text-sm text-gray-400 dark:text-gray-500">Loading editor…</div>
@@ -50,7 +49,6 @@ export function ValueDetailDialog({
   value,
   wordWrap = true,
 }: ValueDetailDialogProps) {
-  const { isDark } = useTheme();
   const [copied, setCopied] = useState(false);
   const { contentProps, handleProps, maximize, enabled } = useDialogDragResize({
     open,
@@ -112,7 +110,6 @@ export function ValueDetailDialog({
             value={dialogValue}
             language={dialogLanguage}
             height="100%"
-            theme={dialogLanguage === "hl7v2" ? hl7v2Theme(isDark) : isDark ? "vs-dark" : "vs"}
             beforeMount={registerHl7v2Language}
             options={{
               ...MONACO_BASE_OPTIONS,

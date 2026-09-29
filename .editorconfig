@@ -8,6 +8,12 @@ charset = utf-8
 trim_trailing_whitespace = true
 insert_final_newline = true
 
+# The Windows-native scripts, matching .gitattributes: without this carve-out the
+# [*] rule above tells an editorconfig-honouring editor to save them as LF, which is
+# the exact silent normalisation the CRLF rules there exist to prevent.
+[*.{ps1,bat,cmd}]
+end_of_line = crlf
+
 [*.md]
 trim_trailing_whitespace = false
 

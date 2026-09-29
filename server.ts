@@ -30,6 +30,15 @@ import next from "next";
 // On Docker:  written by docker-entrypoint.sh from docker-compose environment vars.
 // On Windows: written by the installer wizard during setup.
 // Keys are whitelisted so a hand-edited conf cannot inject arbitrary env vars.
+// SSL_CERT_FILE / SSL_KEY_FILE are whitelisted too, so a conf-supplied TLS
+// certificate is honored on every delivery channel: the conf loop below
+// overwrites process.env for these keys, so the conf beats whatever a launcher
+// exported (Docker, the Windows service, or a hand-edited conf) and server.js
+// then reads them to terminate TLS — no server.js edit needed.
+// BRIDGELINK_CA_CERT is whitelisted for the same reason: without it the key only
+// worked where a launcher exported every conf line (systemd EnvironmentFile=, the
+// macOS wrapper), so on the Windows service a conf-supplied CA was ignored and the
+// BridgeLink hop silently stayed unpinned.
 //
 // The conf path can be overridden via WEBADMIN_CONF; setting it to an empty string
 // skips the conf entirely so explicit PORT / BRIDGELINK_SERVER_URL env vars win.
@@ -41,6 +50,9 @@ const CONF_KEYS = new Set([
   "BRIDGELINK_SERVER_URL",
   "BRIDGELINK_ALLOWED_SERVERS",
   "BRIDGELINK_PUBLIC_HOST",
+  "SSL_CERT_FILE",
+  "SSL_KEY_FILE",
+  "BRIDGELINK_CA_CERT",
 ]);
 const confPath = process.env.WEBADMIN_CONF ?? `${__dirname}/webadmin.conf`;
 if (confPath) {
@@ -59,7 +71,14 @@ if (confPath) {
   }
 }
 
-const port = parseInt(process.env.PORT ?? "3000", 10);
+// 8444 is the documented product default (installer prompt, Setup Guide, and the
+// customer Docker/tarball guides). In every shipped channel webadmin.conf supplies
+// PORT and this fallback never fires; it matters only when the conf is absent,
+// unreadable, or carries no PORT value, where the previous 3000 silently
+// contradicted every piece of product documentation. `npm run dev` is
+// unaffected — it runs `next dev`, which has its own 3000 default and never
+// loads this file.
+const port = parseInt(process.env.PORT ?? "8444", 10);
 const dev = process.env.NODE_ENV !== "production";
 
 const app = next({ dev });

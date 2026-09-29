@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schemas.bridgelink.online/webadmin-plugin/v1.json",
+  "manifestVersion": 1,
+  "connectorPanels": [
+    {
+      "mode": "source",
+      "transportName": "Corpus Reader",
+      "sections": [
+        {
+          "title": "Listener",
+          "fields": [
+            { "key": "port", "type": "number", "label": "Port" },
+            { "key": "useTls", "type": "checkbox", "label": "Use TLS" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -12,8 +12,10 @@ import { Button } from "@/components/ui/button";
 import { RefreshCw } from "lucide-react";
 import { getChannelExportData } from "@/lib/api-client";
 import { downloadFile } from "@/lib/download";
-import { stripEmptyExportDataFields } from "../_lib/export-helpers";
-import { loadAdminPrefs } from "@/components/settings/admin-tab";
+import {
+  stripEmptyExportDataFields,
+  resolveExportLibrariesAutoAnswer,
+} from "../_lib/export-helpers";
 
 /**
  * Mirrors the Java UI's ExportChannelLibrariesDialog.
@@ -66,13 +68,9 @@ export function ExportChannelDialog({
         // and close immediately without showing the dialog. Pass the freshly
         // fetched xml directly since xmlWithLibs state isn't updated yet here.
         if (names.length > 0) {
-          const pref = loadAdminPrefs().exportChannelCodeTemplateLibraries;
-          if (pref === "yes") {
-            doExport(true, xml);
-            return;
-          }
-          if (pref === "no") {
-            doExport(false, xml);
+          const autoAnswer = resolveExportLibrariesAutoAnswer();
+          if (autoAnswer !== null) {
+            doExport(autoAnswer, xml);
             return;
           }
         }

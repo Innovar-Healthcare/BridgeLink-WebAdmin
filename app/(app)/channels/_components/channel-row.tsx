@@ -25,6 +25,7 @@ import {
   ToggleRight,
   Inbox,
   FolderInput,
+  FilePlus,
   GitCommit,
 } from "lucide-react";
 import {
@@ -74,6 +75,7 @@ export interface ChannelRowActions {
   onEdit: (id: string) => void;
   onViewMessages: (id: string) => void;
   onAssignGroup: (id: string) => void;
+  onNewChannel: (id: string) => void;
 }
 
 function ChannelRowImpl({
@@ -412,10 +414,16 @@ function ChannelRowImpl({
           Export Channel
         </ContextMenuItem>
         {groupMode && namedGroupsExist && (
-          <ContextMenuItem onClick={() => actions.onAssignGroup(channel.id)}>
-            <FolderInput className="w-4 h-4" />
-            Assign to Group
-          </ContextMenuItem>
+          <>
+            <ContextMenuItem onClick={() => actions.onNewChannel(channel.id)}>
+              <FilePlus className="w-4 h-4" />
+              New Channel
+            </ContextMenuItem>
+            <ContextMenuItem onClick={() => actions.onAssignGroup(channel.id)}>
+              <FolderInput className="w-4 h-4" />
+              Assign to Group
+            </ContextMenuItem>
+          </>
         )}
         <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onClick={() => actions.onDelete(channel.id)}>

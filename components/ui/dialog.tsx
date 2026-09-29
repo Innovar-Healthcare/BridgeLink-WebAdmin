@@ -39,6 +39,15 @@ function DialogOverlay({
   );
 }
 
+/**
+ * Note the two layout utilities in the base classes below, both load-bearing:
+ * `grid-cols-[minmax(0,1fr)]` caps the implicit grid track at the container width, and
+ * `[&>*]:min-w-0` lets each direct child shrink into it rather than widening it. Without
+ * them a single over-wide body row stretches the whole column and drags the header and
+ * footer outside the dialog's padding. The child selector means a direct child's own
+ * `min-w-*` class would be overridden — no caller does that today, but put such a rule on
+ * an inner wrapper rather than a direct child.
+ */
 function DialogContent({
   className,
   children,
@@ -53,7 +62,7 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 outline-none sm:max-w-lg",
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid grid-cols-[minmax(0,1fr)] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 outline-none sm:max-w-lg [&>*]:min-w-0",
           className
         )}
         {...props}
@@ -127,7 +136,7 @@ function DialogFooter({
   return (
     <div
       data-slot="dialog-footer"
-      className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)}
+      className={cn("flex flex-wrap items-center justify-end gap-2", className)}
       {...props}
     >
       {children}

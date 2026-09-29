@@ -39,6 +39,11 @@ cookies.txt
 #. Regenerated each build, like .next/static — not committed.
 /public/monaco/
 
+# vendored programming fonts for the code editors — copied from @fontsource by
+# scripts/copy-fonts.mjs on every predev/prebuild. Regenerated each
+# build, like /public/monaco/ above — not committed.
+/public/fonts/
+
 # production
 /build
 
@@ -74,20 +79,32 @@ certificates
 # The core repo has zero awareness of commercial plugin internals — no stubs.
 # During local development you may copy or install commercial files via:
 #   ./scripts/install-commercial-plugins.sh /path/to/BridgeLink-Commercial-Plugins
-# Do NOT commit those files here. The directory ignores below catch any new
-# commercial files automatically.
+# Do NOT commit those files here. This list is hand-maintained: a NEW commercial
+# plugin directory needs a NEW line below, or its files show up as untracked in
+# this repo and can be staged into it. (astm was missed for exactly that reason.)
 plugins/claude-ai/
 plugins/oidc/
 plugins/ssl/
 plugins/access-control/
-plugins/openai/
 plugins/anchor/
 plugins/siem/
 plugins/license-manager/
+plugins/work-queue/
+plugins/cognito/
+plugins/astm/
+plugins/coordinator/
+plugins/scripts/
 plugins/_template/
 plugins/.github/
+plugins/.planning/
 plugins/__tests__/
 plugins/CLAUDE.md
+plugins/README.md
+plugins/.claude/
+plugins/.gitignore
+plugins/.gitattributes
+plugins/pom.xml
+plugins/.mvn/
 .git-commercial/
 plugins/.git
 
@@ -95,12 +112,25 @@ plugins/.git
 # Regenerated automatically by npm run predev / prebuild / pretest / preci.
 plugins/index.ts
 
-# Claude Code internal files — session plans, worktrees, local settings
-.claude/
+# Claude Code internal files — session plans, worktrees, local settings.
+# Shared project config (skills, agents, hooks, settings.json) IS tracked so
+# the team inherits it; everything else under .claude/ stays local.
+# Adding a new SHARED dir under .claude/ (e.g. commands/, rules/)? Add a
+# negation below, or it silently never shows up in git status.
+.claude/*
+!.claude/skills/
+!.claude/agents/
+!.claude/hooks/
+!.claude/settings.json
+!.claude/launch.json
 .planning/
 
 # Large binary design artifacts — kept locally, not committed to the repo
 docs/*.pdf
+
+# Browser-verification screenshots taken during manual QA of a ticket.
+# Local evidence only — regenerate by re-running the page rather than committing.
+.qa-shots/
 
 # Local-only review artifacts (kept out of the repo; other parity docs remain tracked)
 docs/-Post-Beta-Release-Summary.md

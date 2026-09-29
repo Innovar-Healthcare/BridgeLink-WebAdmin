@@ -55,7 +55,12 @@ import { ImportProgressDialog } from "./import-progress-dialog";
 import { downloadFile } from "@/lib/download";
 import { fmtDate } from "@/lib/utils";
 import { useCompactMode, densityHeight } from "@/lib/hooks/use-compact-mode";
-import { parseLookupCsv, toLookupCsv, lookupCsvFilename } from "@/lib/lookup-csv";
+import {
+  parseLookupCsv,
+  toLookupCsv,
+  lookupCsvFilename,
+  hasFormulaTriggerValue,
+} from "@/lib/lookup-csv";
 import { DataTable } from "@/components/data-table";
 import { useColumnConfig, type ColDef } from "@/lib/hooks/use-column-config";
 import { useSortable } from "@/lib/hooks/use-sortable";
@@ -67,6 +72,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { checkFileSize } from "@/lib/file-size-guard";
 
 // ─── Search Mode Options ───────────────────────────────────────────────────────
 
@@ -470,6 +476,11 @@ export function ValuesTab({ group, actionsRef, onActionsChanged }: ValuesTabProp
     e.target.value = "";
     if (!file) return;
     setError(null);
+    const tooLarge = checkFileSize(file);
+    if (tooLarge) {
+      setError(tooLarge);
+      return;
+    }
     try {
       const text = await file.text();
       const parsed = parseLookupCsv(text);
@@ -510,9 +521,15 @@ export function ValuesTab({ group, actionsRef, onActionsChanged }: ValuesTabProp
     setError(null);
     try {
       const data = await exportLookupGroup(group.id);
-      downloadFile(toLookupCsv(data.values ?? {}), lookupCsvFilename(), {
+      const values = data.values ?? {};
+      downloadFile(toLookupCsv(values), lookupCsvFilename(), {
         mimeType: "text/csv",
       });
+      if (hasFormulaTriggerValue(values)) {
+        toast.warning(
+          "Some exported values start with characters spreadsheet apps may treat as formulas (=, +, -, @). Open the file with care."
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

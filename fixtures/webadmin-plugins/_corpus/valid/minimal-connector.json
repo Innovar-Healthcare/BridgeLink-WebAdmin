@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "connectorPanels": [
+    {
+      "mode": "destination",
+      "transportName": "Corpus Sender",
+      "sections": [
+        {
+          "title": "General",
+          "fields": [{ "key": "host", "type": "text", "label": "Host" }]
+        }
+      ]
+    }
+  ]
+}

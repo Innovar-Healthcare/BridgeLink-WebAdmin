@@ -1,0 +1,6 @@
+{
+  "name": "Mock Syslog Mode",
+  "path": "mock-syslog-mode",
+  "version": "1.0.0",
+  "enabled": true
+}

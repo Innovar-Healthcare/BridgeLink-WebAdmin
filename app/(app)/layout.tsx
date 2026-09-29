@@ -16,12 +16,14 @@ import {
   type SessionInfo,
 } from "@/lib/auth";
 import { getServerVersion } from "@/lib/api/api-auth";
+import { hasPendingPasswordChange } from "@/lib/pending-password-change";
 import { evaluateServerCompatibility, type CompatResult } from "@/lib/version-compat";
 import { CompatibilityBanner } from "@/components/compatibility-banner";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
 import { getUsers } from "@/lib/api/api-users";
 import { loadRuntimePlugins } from "@/lib/runtime-plugins/loader";
+import { ensureConnectorDefaultsLoaded } from "@/lib/connector-defaults-cache";
 import { Sidebar } from "@/components/sidebar";
 import { SidebarToggleButton } from "@/components/sidebar-toggle-button";
 import { NavigationGuardProvider } from "@/lib/navigation-guard";
@@ -96,8 +98,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // Client-only auth bootstrap. Runs once we've mounted.
     if (!mounted) return;
     // Common case (reload / existing tab): sessionStorage already has a
-    // session. `authReady` picks this up directly — nothing to do here.
-    if (isAuthenticated()) return;
+    // session. `authReady` picks this up directly — nothing left to do beyond
+    // the pending-password-change check.
+    const existing = getSession();
+    if (existing) {
+      // Owes a password change — send it back to /login. Only the
+      // navigation happens here; `owesPasswordChange` below is what keeps
+      // children from rendering, derived rather than stored so this effect
+      // doesn't setState and cascade a render.
+      if (hasPendingPasswordChange(existing.serverUrl, existing.username)) {
+        router.replace("/login");
+      }
+      return;
+    }
 
     // sessionStorage is empty — try to rehydrate from the per-server HttpOnly
     // cookies set by the proxy at login. Pass the last-used server URL so the
@@ -117,6 +130,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           return;
         }
         const data = (await res.json()) as WhoamiResponse;
+        // A login that still owes a password change does not get in through a
+        // new tab either — this is the path a per-tab flag would have missed.
+        if (hasPendingPasswordChange(data.serverUrl, data.username)) {
+          router.replace("/login");
+          setRehydration("redirecting");
+          return;
+        }
         saveSession({ username: data.username, serverUrl: data.serverUrl, userId: data.userId });
         setRehydration("rehydrated");
       } catch {
@@ -130,10 +150,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     };
   }, [mounted, router]);
 
+  // A session that reached a mandatory password screen and left without setting
+  // one must not get in by typing a URL. Recomputed each render from
+  // the two synchronous stores rather than held in state: an effect that read it
+  // and setState'd would be a cascading render. Defense in depth only — see
+  // lib/pending-password-change.ts.
+  const session = mounted ? getSession() : null;
+  const owesPasswordChange =
+    session !== null && hasPendingPasswordChange(session.serverUrl, session.username);
+
   // The server and first client render (mounted === false) both produce the
   // skeleton, so hydration matches. Once mounted, an existing session (the
   // common reload case) or a successful cookie rehydration unlocks the layout.
-  const authReady = mounted && (isAuthenticated() || rehydration === "rehydrated");
+  const authReady =
+    mounted && !owesPasswordChange && (isAuthenticated() || rehydration === "rehydrated");
 
   // Background: fill in session metadata (serverVersion, userId) that the
   // login page skipped for faster navigation to the dashboard.
@@ -161,6 +191,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       // here; this covers the new-tab rehydration and direct-load paths that
       // bypass the login page.
       setCompat(evaluateServerCompatibility(version ?? session.serverVersion));
+
+      // Retry the connector-defaults prefetch: the new-tab rehydration
+      // path (saveSession above) stores no serverVersion, so the authReady-triggered
+      // call below ran with none and silently no-op'd (fail-soft, not memoized on a
+      // false gate). By here serverVersion is populated whenever the fetch above
+      // succeeded, so retry — a cheap no-op if the first call already prefetched
+      // (login/reload had a version), the real prefetch on the new-tab path, and
+      // still a safe no-op if the version fetch failed (stays on hardcoded fallback).
+      void ensureConnectorDefaultsLoaded();
     })();
   }, [authReady]);
 
@@ -178,6 +217,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
+  }, [authReady]);
+
+  // Prefetch built-in connector defaults from Core so the connector
+  // default-properties seams can read them synchronously. Fully fail-soft — a miss
+  // falls back to the hardcoded template — so UI readiness is NOT gated on it.
+  useEffect(() => {
+    if (!authReady) return;
+    void ensureConnectorDefaultsLoaded();
   }, [authReady]);
 
   const dismissCompatBanner = () => {

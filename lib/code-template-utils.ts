@@ -34,7 +34,7 @@ export const CONNECTOR_CONTEXT_TYPES = new Set<string>(CONNECTOR_CONTEXT_TYPE_LI
  * Context types that appear in the scripts-tab reference panel.
  * Mirrors Java's CodeTemplateContextSet.getChannelContextSet() for the
  * four script types shown in the Scripts tab (Deploy / Undeploy /
- * Preprocessing / Postprocessing) plus Attachment and Batch.
+ * Preprocessor / Postprocessor) plus Attachment and Batch.
  */
 export const CHANNEL_SCRIPT_CONTEXT_TYPES = new Set<string>([
   "CHANNEL_DEPLOY",
@@ -548,6 +548,13 @@ export function wordWrap(
  *
  * Note: multi-paragraph descriptions are collapsed to a single wrapped line (the parser
  * normalises whitespace); the common single-paragraph case is byte-identical to Java.
+ *
+ * this is now the **client fallback** — the code-templates page calls the
+ * server's `POST /codeTemplates/_generateDoc` (`CodeTemplateUtil.updateCode`) on a Core at
+ * or above `MIN_SERVER_MISC_UTILS` and only falls back here (or on a server error) below
+ * it. Delete this function, {@link wordWrap}, {@link DEFAULT_JSDOC_DESCRIPTION}, and
+ * `__tests__/unit/code-template-jsdoc-generation.test.ts` once
+ * `MIN_SUPPORTED_SERVER_VERSION` reaches that floor.
  */
 export function generateJsDoc(code: string): string {
   if (!code || !code.trim()) return code;

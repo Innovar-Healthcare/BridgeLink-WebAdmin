@@ -539,8 +539,13 @@ export async function getServerConfigurationXml(): Promise<string> {
  * called from SettingsPanelServer.doRestore().
  *
  * Accepts raw XML body (the previously-exported ServerConfiguration).
- * This is an async server operation (ExecuteType.ASYNC) — the response returns
- * immediately while the server processes in the background.
+ *
+ * The import runs SYNCHRONOUSLY inside this request — ConfigurationServlet
+ * .setServerConfiguration does the work on the request thread, and the Java
+ * client shows "Your configuration was successfully restored." once the call
+ * returns. `ExecuteType.ASYNC` on the servlet interface only selects the Java
+ * client's abortable HTTP connection; it does not make the server defer the
+ * work, so there is nothing to poll for afterwards.
  */
 export async function restoreServerConfiguration(
   xml: string,
@@ -699,8 +704,15 @@ export async function sendTestEmail(
  * Returns a single user preference as plain text.
  * Mirrors Java's mirthClient.getUserPreference(userId, name).
  * Uses text/plain — NOT JSON — per UserServletInterface annotation.
+ *
+ * Returns `null` when the preference could NOT be read (any non-ok response),
+ * and `""` only when the server answered with a genuinely empty value — i.e.
+ * the preference has never been set. Callers must keep those apart: `""` is a
+ * real answer, `null` is "we don't know". Collapsing them is how a login
+ * restricted by `password.restrictgracesessions` — where this endpoint 403s —
+ * came to look like a first login and showed the wrong screen.
  */
-export async function getUserPreference(userId: number, name: string): Promise<string> {
+export async function getUserPreference(userId: number, name: string): Promise<string | null> {
   const serverUrl = getServerUrl();
   const res = await fetch(`${PROXY_BASE}/users/${userId}/preferences/${name}`, {
     headers: {
@@ -709,7 +721,7 @@ export async function getUserPreference(userId: number, name: string): Promise<s
     },
     credentials: "include",
   });
-  if (!res.ok) return "";
+  if (!res.ok) return null;
   return res.text();
 }
 
@@ -717,14 +729,19 @@ export async function getUserPreference(userId: number, name: string): Promise<s
  * PUT /users/{userId}/preferences/{name}
  * Saves a single user preference as plain text body.
  * Mirrors Java's mirthClient.setUserPreference(userId, name, value).
+ *
+ * Returns whether the write succeeded rather than throwing, so fire-and-forget
+ * callers stay unaffected. Callers that depend on the write landing must check it
+ * — the first-login screen does, because a silently dropped `firstlogin=false`
+ * would re-prompt for a new password on every subsequent login.
  */
 export async function setUserPreference(
   userId: number,
   name: string,
   value: string
-): Promise<void> {
+): Promise<boolean> {
   const serverUrl = getServerUrl();
-  await fetch(`${PROXY_BASE}/users/${userId}/preferences/${name}`, {
+  const res = await fetch(`${PROXY_BASE}/users/${userId}/preferences/${name}`, {
     method: "PUT",
     headers: {
       "Content-Type": "text/plain",
@@ -733,6 +750,7 @@ export async function setUserPreference(
     credentials: "include",
     body: value,
   });
+  return res.ok;
 }
 
 /**
@@ -806,6 +824,13 @@ export const DIRECTORY_RESOURCE_FQN =
   "com.mirth.connect.plugins.directoryresource.DirectoryResourceProperties";
 /** DirectoryResourceProperties.PLUGIN_POINT */
 export const DIRECTORY_PLUGIN_POINT = "Directory Resource";
+/**
+ * com.mirth.connect.model.InvalidResourceProperties — the FQN the server wraps an orphaned resource
+ * in (its plugin/subclass could no longer be resolved). The original definition is carried verbatim
+ * inside the entry's `propertiesXml`; the server re-emits that XML on save (ResourcePropertiesConverter),
+ * so the WebUI round-trips such an entry unchanged and renders it read-only.
+ */
+export const INVALID_RESOURCE_FQN = "com.mirth.connect.model.InvalidResourceProperties";
 
 /** Coerce a Staxon JSON value to boolean (bare `true`/`false`, or the string forms). */
 function asBool(v: unknown, fallback = false): boolean {
@@ -856,6 +881,11 @@ export async function getResources(): Promise<ResourceProperties[]> {
         // Server model default is true (DirectoryResourceProperties.java:20).
         directoryRecursion: asBool(e.directoryRecursion, true),
         ...(typeof e["@version"] === "string" ? { "@version": e["@version"] as string } : {}),
+        // The modeled fields above drive the UI; `_raw` is the round-trip source of truth so an
+        // unmodeled subtype (a future non-Directory plugin) or an orphaned InvalidResourceProperties
+        // is re-emitted on save without its subtype fields being stripped.
+        _raw: e,
+        invalid: fqn === INVALID_RESOURCE_FQN,
       });
     }
   }
@@ -875,34 +905,59 @@ export async function getResources(): Promise<ResourceProperties[]> {
  * FQN onto every entry — the latter silently re-typed any non-Directory resource to Directory on
  * save, destroying its subtype fields. Rows created in the WebUI carry the Directory FQN.
  *
- * Deferred limitations — none reachable without a non-Directory resource plugin (none exists in OSS
- * or any commercial plugin); each would require an XML round-trip rather than this JSON one:
- *   1. An InvalidResourceProperties (orphaned resource) round-trips verbatim only via XML.
- *   2. Subtype fields of a future non-Directory type aren't modeled here; such a type would ship
- *      its own WebUI panel (see resources-tab.tsx makeNewResource note).
- *   3. The JSON GET leaves numeric-looking string fields (directory/description) subject to Staxon
- *      autoPrimitive (the class already fixed for tags/config-map); an XML GET would fix it.
+ * Round-trip strategy: a resource the WebUI does not model — a future non-Directory
+ * plugin type, or an orphaned InvalidResourceProperties — is re-emitted from its captured `_raw`
+ * entry verbatim, under its own FQN. The server resolves InvalidResourceProperties (the orphan's
+ * original, unresolvable FQN lives only inside `_raw.propertiesXml`, opaque text to XStream) and
+ * re-emits that XML on store, so no full-set PUT 500s and no data is lost. Such rows are rendered
+ * read-only in the tab, so their base fields never diverge from `_raw`. A modeled Directory row is
+ * built from the edited fields (overlaid on `_raw` so any server-added Directory field survives).
+ *
+ * Known limitation: numeric-looking string subtype fields on a real non-Directory type are still
+ * subject to Staxon autoPrimitive on this JSON path (the class); true byte-exactness would
+ * need an XML GET/PUT. Not reachable today — no non-Directory resource plugin exists.
  */
 export async function setResources(resources: ResourceProperties[]): Promise<void> {
   const groups = new Map<string, Record<string, unknown>[]>();
   for (const r of resources) {
     const fqn = r.fqn ?? DIRECTORY_RESOURCE_FQN;
     const isDirectory = fqn === DIRECTORY_RESOURCE_FQN;
-    const entry: Record<string, unknown> = {
-      "@version": r["@version"] ?? "4.6.0",
-      pluginPointName: r.pluginPointName ?? (isDirectory ? DIRECTORY_PLUGIN_POINT : ""),
-      type: r.type,
-      id: r.id,
-      name: r.name,
-      description: r.description ?? "",
-      includeWithGlobalScripts: r.includeWithGlobalScripts,
-      loadParentFirst: r.loadParentFirst,
-    };
-    if (isDirectory) {
-      entry.directory = r.directory ?? "";
-      // Server model default is true (DirectoryResourceProperties.java:20).
-      entry.directoryRecursion = r.directoryRecursion ?? true;
+
+    let entry: Record<string, unknown>;
+    if (!isDirectory && r._raw) {
+      // Unmodeled / invalid: re-emit the captured entry verbatim (the row is read-only in the UI,
+      // so its base fields are unchanged). Preserves subtype fields and, for an orphan, propertiesXml.
+      entry = { ...r._raw };
+      if (r.invalid) {
+        // Drop the serialized Throwable `cause` from an orphan before the JSON PUT. The server needs
+        // only `propertiesXml` to re-store an InvalidResourceProperties (ResourcePropertiesConverter
+        // marshals that verbatim) and regenerates `cause` fresh on the next GET. Re-sending the
+        // Throwable graph would risk a reflective unmarshal failure on the JSON path — and because an
+        // orphan deserializes under the ResourceProperties expected class, such a failure is not
+        // wrapped but throws SerializerException, 500-ing the entire full-set PUT.
+        delete entry.cause;
+      }
+    } else {
+      const base: Record<string, unknown> = {
+        "@version": r["@version"] ?? "4.6.0",
+        pluginPointName: r.pluginPointName ?? (isDirectory ? DIRECTORY_PLUGIN_POINT : ""),
+        type: r.type,
+        id: r.id,
+        name: r.name,
+        description: r.description ?? "",
+        includeWithGlobalScripts: r.includeWithGlobalScripts,
+        loadParentFirst: r.loadParentFirst,
+      };
+      if (isDirectory) {
+        base.directory = r.directory ?? "";
+        // Server model default is true (DirectoryResourceProperties.java:20).
+        base.directoryRecursion = r.directoryRecursion ?? true;
+      }
+      // Overlay edited fields on `_raw` (when present) so any field the server added but the UI does
+      // not model survives; WebUI-created rows have no `_raw` and fall back to `base` alone.
+      entry = r._raw ? { ...r._raw, ...base } : base;
     }
+
     const group = groups.get(fqn);
     if (group) group.push(entry);
     else groups.set(fqn, [entry]);

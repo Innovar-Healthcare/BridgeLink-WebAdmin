@@ -27,9 +27,9 @@ import { useColumnConfig, type ColDef } from "@/lib/hooks/use-column-config";
 import { useSortable } from "@/lib/hooks/use-sortable";
 import { formatContent } from "@/lib/format-content";
 import { dataTypeToLanguage } from "@/lib/value-format";
-import { registerHl7v2Language, hl7v2Theme } from "@/lib/monaco-hl7v2";
-import { useTheme } from "@/lib/hooks/use-theme";
+import { registerHl7v2Language } from "@/lib/monaco-hl7v2";
 import type { ConnectorInfo } from "@/components/messages/advanced-filter-panel";
+import { checkTotalFileSize } from "@/lib/file-size-guard";
 
 // ─── Column definitions ──────────────────────────────────────────────────────
 
@@ -135,7 +135,6 @@ export function SendMessageDialog({
   onSend,
   initialData,
 }: SendMessageDialogProps) {
-  const { isDark } = useTheme();
   const destColConfig = useColumnConfig(DEST_COLS, "bl-send-msg-dest-cols-v1");
   const destSortState = useSortable<DestCol>("destination", "asc");
   const srcMapColConfig = useColumnConfig(SRC_MAP_COLS, "bl-send-msg-srcmap-cols-v1");
@@ -240,6 +239,14 @@ export function SendMessageDialog({
     const files = Array.from(e.target.files ?? []);
     if (!files.length) return;
 
+    // Multi-select: bound each file and the combined total before reading.
+    const tooLarge = checkTotalFileSize(files);
+    if (tooLarge) {
+      setError(tooLarge);
+      e.target.value = "";
+      return;
+    }
+
     Promise.all(
       files.map(
         (file) =>
@@ -264,6 +271,14 @@ export function SendMessageDialog({
   function handleBinaryFile(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     if (!files.length) return;
+
+    // Multi-select: bound each file and the combined total before reading.
+    const tooLarge = checkTotalFileSize(files);
+    if (tooLarge) {
+      setError(tooLarge);
+      e.target.value = "";
+      return;
+    }
 
     Promise.all(
       files.map(
@@ -399,9 +414,6 @@ export function SendMessageDialog({
                   <Editor
                     height="100%"
                     language={editorLanguage}
-                    theme={
-                      editorLanguage === "hl7v2" ? hl7v2Theme(isDark) : isDark ? "vs-dark" : "vs"
-                    }
                     beforeMount={registerHl7v2Language}
                     value={singleContent}
                     onChange={(v) => setContents([v ?? ""])}

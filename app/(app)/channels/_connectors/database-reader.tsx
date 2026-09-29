@@ -97,7 +97,6 @@ const EMPTY_SOURCE_TRANSFORMER_XML =
 function DatabaseReaderBottomSection({
   propertiesXml,
   onChange,
-  isDark,
   channelId = "",
   channelName = "",
   transportName,
@@ -284,15 +283,10 @@ function DatabaseReaderBottomSection({
   // don't apply. updateEachActionPerformed() leaves it enabled.
   const varListDisabled = local.updateMode === UPDATE_ONCE;
 
-  // Monaco language/theme switches when the user toggles "Use JavaScript".
+  // Monaco language switches when the user toggles "Use JavaScript". There is no
+  // matching theme switch: the app has one global theme carrying every language's
+  // token rules, so SQL and Rhino both color correctly under it.
   const editorLanguage = local.useScript ? RHINO_LANG_ID : "sql";
-  const editorTheme = local.useScript
-    ? isDark
-      ? "mirth-js-dark"
-      : "mirth-js"
-    : isDark
-      ? "vs-dark"
-      : "vs";
 
   // ── Button handlers ──────────────────────────────────────────────────────────
 
@@ -705,7 +699,6 @@ function DatabaseReaderBottomSection({
                   }
                   seam.registerEditor(editor, monaco);
                 }}
-                theme={editorTheme}
                 height="100%"
                 width="100%"
                 options={getRhinoEditorOptions({
@@ -787,7 +780,6 @@ function DatabaseReaderBottomSection({
                       }
                       seam.registerEditor(editor, monaco);
                     }}
-                    theme={editorTheme}
                     height="100%"
                     width="100%"
                     options={getRhinoEditorOptions({

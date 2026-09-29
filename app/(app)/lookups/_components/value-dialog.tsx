@@ -9,7 +9,6 @@ import { Input } from "@/components/ui/input";
 import { ChevronRight, ChevronDown, Copy, Check } from "lucide-react";
 import { getLookupValue } from "@/lib/api-client";
 import type { LookupGroup } from "@/lib/api-client";
-import { useTheme } from "@/lib/hooks/use-theme";
 import { MonacoEditor } from "@/components/monaco-editor";
 import { ResizableEditorBox } from "@/components/resizable-editor-box";
 import { MONACO_BASE_OPTIONS } from "@/lib/monaco-defaults";
@@ -190,7 +189,6 @@ export function ValueDialog({
   const [activeTab, setActiveTab] = useState<"raw" | "tree">("raw");
   const [copiedKey, setCopiedKey] = useState(false);
 
-  const { isDark } = useTheme();
   // This editor lives inside a Radix modal dialog — host Monaco's widgets (context
   // menu, find widget) inside the dialog subtree or clicking them dismisses the
   // dialog (see useMonacoOverflowHost /.
@@ -360,7 +358,6 @@ export function ValueDialog({
                 <MonacoEditor
                   height="100%"
                   language="json"
-                  theme={isDark ? "vs-dark" : "vs"}
                   value={value}
                   onChange={(val) => setValue(val ?? "")}
                   options={{

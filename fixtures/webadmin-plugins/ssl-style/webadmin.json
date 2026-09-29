@@ -1,0 +1,123 @@
+{
+  "manifestVersion": 1,
+  "minWebAdminVersion": "26.3.0",
+  "connectorPanels": [
+    {
+      "mode": "source",
+      "transportName": "SSL Demo Listener",
+      "sections": [
+        {
+          "title": "TLS",
+          "fields": [
+            { "key": "tlsEnabled", "type": "checkbox", "label": "Enable TLS" },
+            {
+              "key": "protocol",
+              "type": "select",
+              "label": "Protocol",
+              "tooltip": "Minimum TLS protocol version accepted from clients.",
+              "options": [
+                { "value": "any", "label": "Any" },
+                { "value": "TLSv1.2", "label": "TLSv1.2" },
+                { "value": "TLSv1.3", "label": "TLSv1.3" }
+              ],
+              "visibleWhen": { "field": "tlsEnabled", "op": "truthy" }
+            },
+            {
+              "key": "handshakeTimeout",
+              "type": "number",
+              "label": "Handshake Timeout (ms)",
+              "visibleWhen": { "field": "tlsEnabled", "op": "truthy" },
+              "validation": [
+                { "rule": "min", "value": 0 },
+                { "rule": "max", "value": 300000 }
+              ]
+            },
+            {
+              "key": "cipherSuites",
+              "type": "textarea",
+              "label": "Cipher Suites",
+              "tooltip": "Optional comma-separated allowlist. Leave blank for platform defaults.",
+              "visibleWhen": {
+                "allOf": [
+                  { "field": "tlsEnabled", "op": "truthy" },
+                  { "field": "protocol", "op": "ne", "value": "any" }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "title": "Keystore",
+          "fields": [
+            {
+              "key": "keystorePath",
+              "type": "text",
+              "label": "Keystore Path",
+              "placeholder": "/opt/bridgelink/certs/server.p12",
+              "visibleWhen": { "field": "tlsEnabled", "op": "truthy" },
+              "validation": [{ "rule": "required" }]
+            },
+            {
+              "key": "keystorePassword",
+              "type": "secret",
+              "label": "Keystore Password",
+              "visibleWhen": { "field": "tlsEnabled", "op": "truthy" }
+            }
+          ]
+        },
+        {
+          "title": "Client Authentication",
+          "fields": [
+            {
+              "key": "clientAuth",
+              "type": "radio",
+              "label": "Client Certificates",
+              "options": [
+                { "value": "none", "label": "Not required" },
+                { "value": "optional", "label": "Requested" },
+                { "value": "required", "label": "Required" }
+              ],
+              "visibleWhen": { "field": "tlsEnabled", "op": "truthy" }
+            },
+            {
+              "key": "truststorePath",
+              "type": "text",
+              "label": "Truststore Path",
+              "visibleWhen": {
+                "allOf": [
+                  { "field": "tlsEnabled", "op": "truthy" },
+                  { "field": "clientAuth", "op": "in", "values": ["optional", "required"] }
+                ]
+              },
+              "validation": [{ "rule": "required" }]
+            },
+            {
+              "key": "truststorePassword",
+              "type": "secret",
+              "label": "Truststore Password",
+              "visibleWhen": {
+                "allOf": [
+                  { "field": "tlsEnabled", "op": "truthy" },
+                  { "field": "clientAuth", "op": "in", "values": ["optional", "required"] }
+                ]
+              }
+            },
+            {
+              "key": "verifyHostname",
+              "type": "checkbox",
+              "label": "Verify Peer Hostname",
+              "enabledWhen": { "field": "tlsEnabled", "op": "truthy" }
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "label": "Check Certificate",
+          "endpoint": "/extensions/ssl-style/webadmin/actions/check-certificate",
+          "method": "GET"
+        }
+      ]
+    }
+  ]
+}

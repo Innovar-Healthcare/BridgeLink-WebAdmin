@@ -9,6 +9,11 @@
 // A null result means no issue. See #45.
 
 import { tryParseJs } from "@/lib/js-validation";
+import {
+  scriptErrorMessage,
+  serverSupportsScriptValidation,
+  validateScriptsBatch,
+} from "@/lib/api/api-script-validation";
 import type { AttachmentHandlerState } from "./channel-xml";
 
 /**
@@ -27,13 +32,28 @@ export function customHandlerSaveWarning(state: AttachmentHandlerState): string 
 }
 
 /**
- * Non-null warning when a JavaScript attachment script fails to parse. `tryParseJs` parses E4X
- * XML literals (via acorn-jsx) and neutralizes E4X operators, so real errors are caught even in
- * E4X scripts; forms it still cannot represent are deferred (returns null), and the server
- * validates the script at deploy time regardless.
+ * Validate a JavaScript attachment script and return the one-line error message, or `null`
+ * when it parses cleanly. Server-side (real Rhino) when the connected Core supports it
+ *, else via the acorn fallback, which parses E4X XML literals and neutralizes E4X
+ * operators so real errors are caught even in E4X scripts (deferring forms it cannot represent).
  */
-export function jsAttachmentSaveWarning(script: string): string | null {
-  const err = tryParseJs(script);
+export async function validateJsAttachmentScript(script: string): Promise<string | null> {
+  if (serverSupportsScriptValidation()) {
+    return scriptErrorMessage((await validateScriptsBatch({ script })).script);
+  }
+  // TRANSITIONAL FALLBACK — client-side acorn path for Core older than the endpoint.
+  // Delete once MIN_SUPPORTED_SERVER_VERSION >= MIN_SERVER_VALIDATE_SCRIPTS.
+  return tryParseJs(script);
+}
+
+/**
+ * Non-null warning when a JavaScript attachment script fails to parse. Soft block ("Save
+ * anyway?") rather than a hard block — Java saves the script freely and its Validate button is
+ * informational only, so an E4X/Rhino construct the validator flags must not make a valid script
+ * unsaveable #45); the server compiles the script at deploy time regardless.
+ */
+export async function jsAttachmentSaveWarning(script: string): Promise<string | null> {
+  const err = await validateJsAttachmentScript(script);
   if (!err) return null;
   return `The script has a possible syntax error (${err}). If it uses Rhino/E4X syntax this may be a false positive. Save anyway?`;
 }

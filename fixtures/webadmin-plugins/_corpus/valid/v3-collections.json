@@ -1,0 +1,35 @@
+{
+  "manifestVersion": 3,
+  "connectorPanels": [
+    {
+      "mode": "destination",
+      "transportName": "Corpus Collection Sender",
+      "sections": [
+        {
+          "title": "Collections",
+          "fields": [
+            {
+              "key": "headers",
+              "type": "map",
+              "label": "Headers",
+              "keyLabel": "Header",
+              "valueLabel": "Value",
+              "addLabel": "Add Header"
+            },
+            {
+              "key": "parameters",
+              "type": "multimap",
+              "label": "Query Parameters"
+            },
+            {
+              "key": "mapVariables",
+              "type": "stringList",
+              "label": "Map Variables",
+              "itemLabel": "Variable"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

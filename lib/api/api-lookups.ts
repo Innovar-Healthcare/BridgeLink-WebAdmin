@@ -5,6 +5,8 @@
  * All requests use skipNormalize: true to bypass XStream normalization.
  */
 
+import { getSession } from "@/lib/auth";
+import { isVersionAtLeast } from "@/lib/utils";
 import { request } from "./api-core";
 import { getPluginProperties, setPluginProperties } from "./api-extensions";
 
@@ -203,8 +205,43 @@ export async function exportLookupGroup(id: number): Promise<ExportLookupGroupRe
 
 // ─── Value API ────────────────────────────────────────────────────────────────
 
-/** Returns the value for a key, or throws if not found (404). */
+/**
+ * First Core release with body-based lookup key endpoints, PR #38).
+ *
+ * A key containing `/`, `%`, `\` or a control character cannot travel in the URL
+ * path: Jersey percent-encodes it into one segment, and Core's Jetty 12
+ * (`UriCompliance.DEFAULT`) rejects the ambiguous encoding with a 400 before any
+ * servlet runs. PR #38 moved the key into a JSON request body on new POST
+ * endpoints (`values/get`, `values/set`, `values/delete`), keeping the old
+ * path-based endpoints for API compatibility.
+ */
+export const MIN_SERVER_LOOKUP_BODY_KEY = "26.9.0";
+
+/**
+ * True when the connected Core serves the body-based value endpoints. Missing or
+ * unparseable server versions return `false` (via {@link isVersionAtLeast}), so
+ * callers fall back to the legacy path endpoints — which keep working for keys
+ * without reserved characters, exactly as before this change.
+ */
+function serverSupportsBodyKeyEndpoints(): boolean {
+  return isVersionAtLeast(getSession()?.serverVersion, MIN_SERVER_LOOKUP_BODY_KEY);
+}
+
+/**
+ * Returns the value for a key, or throws if not found (404).
+ *
+ * On Core ≥ {@link MIN_SERVER_LOOKUP_BODY_KEY} the key travels in the request
+ * body (`POST .../values/get`, mirroring the Java client's `getValue`); on older
+ * servers it falls back to the legacy path endpoint.
+ */
 export async function getLookupValue(groupId: number, key: string): Promise<LookupValue> {
+  if (serverSupportsBodyKeyEndpoints()) {
+    return request<LookupValue>(`/v1/lookups/groups/${groupId}/values/get`, {
+      method: "POST",
+      body: JSON.stringify({ key }),
+      skipNormalize: true,
+    });
+  }
   return request<LookupValue>(`/v1/lookups/groups/${groupId}/values/${encodeURIComponent(key)}`, {
     skipNormalize: true,
   });
@@ -226,7 +263,20 @@ export async function searchLookupValues(
   );
 }
 
+/**
+ * Creates or updates a value. On Core ≥ {@link MIN_SERVER_LOOKUP_BODY_KEY} the
+ * key and value travel together in the body (`POST .../values/set`, body
+ * `{ key, value }` — the Java client's `LookupKeyValueRequest`); on older servers
+ * it falls back to `PUT .../values/{key}` with a `{ value }` body.
+ */
 export async function setLookupValue(groupId: number, key: string, value: string): Promise<void> {
+  if (serverSupportsBodyKeyEndpoints()) {
+    return request<void>(`/v1/lookups/groups/${groupId}/values/set`, {
+      method: "POST",
+      body: JSON.stringify({ key, value }),
+      skipNormalize: true,
+    });
+  }
   return request<void>(`/v1/lookups/groups/${groupId}/values/${encodeURIComponent(key)}`, {
     method: "PUT",
     body: JSON.stringify({ value }),
@@ -234,7 +284,19 @@ export async function setLookupValue(groupId: number, key: string, value: string
   });
 }
 
+/**
+ * Deletes a value. On Core ≥ {@link MIN_SERVER_LOOKUP_BODY_KEY} the key travels
+ * in the body (`POST .../values/delete`, body `{ key }`); on older servers it
+ * falls back to `DELETE .../values/{key}`.
+ */
 export async function deleteLookupValue(groupId: number, key: string): Promise<void> {
+  if (serverSupportsBodyKeyEndpoints()) {
+    return request<void>(`/v1/lookups/groups/${groupId}/values/delete`, {
+      method: "POST",
+      body: JSON.stringify({ key }),
+      skipNormalize: true,
+    });
+  }
   return request<void>(`/v1/lookups/groups/${groupId}/values/${encodeURIComponent(key)}`, {
     method: "DELETE",
     skipNormalize: true,

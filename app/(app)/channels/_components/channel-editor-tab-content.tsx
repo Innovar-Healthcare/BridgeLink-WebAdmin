@@ -79,6 +79,8 @@ export interface ChannelEditorTabContentProps {
 
   // Scripts initial tab (edit mode only)
   initialScript?: "preprocessing" | "postprocessing" | "deploy" | "undeploy";
+  /** Config Search deep link: line to reveal in that script. */
+  initialScriptLine?: number;
 
   // Plugin tabs
   activePluginTab: string | null;
@@ -127,6 +129,7 @@ export function ChannelEditorTabContent({
   onClearSrcErrors,
   onClearDestErrors,
   initialScript,
+  initialScriptLine,
   activePluginTab,
   mode,
   editChannelId,
@@ -252,10 +255,10 @@ export function ChannelEditorTabContent({
     return (
       <ScriptsTab
         scripts={scripts}
-        isDark={isDark}
         onChange={onScriptsChange}
         channelId={channelId}
         initialScript={initialScript}
+        initialLine={initialScriptLine}
       />
     );
   }

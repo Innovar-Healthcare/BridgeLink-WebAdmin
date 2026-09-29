@@ -1,2 +1,33 @@
-# Always use LF for shell scripts regardless of OS
+# LF for everything text, everywhere. Without this, core.autocrlf=true -- the
+# Git-for-Windows installer default -- checks the whole repo out with CRLF, and
+# .prettierrc pins "endOfLine": "lf", so `npm run format:check` fails on essentially
+# every file in the repo. A Windows QA run hit exactly that: ~1363 files reported, and
+# the only way past it was setting core.autocrlf=false per clone by hand.
+#
+# text=auto still leaves genuinely binary files alone, and it does NOT rewrite what is
+# already committed -- git only normalises on the way in. All but three tracked files
+# were already LF; those three (.editorconfig, .prettierignore,
+# public/bridgelink-icon.svg) were renormalised in the same commit as this rule, so
+# nobody discovers them later as a surprise diff under `git add --renormalize`.
+#
+# Note this does not fix an EXISTING Windows clone: the working tree there stays CRLF
+# and git reports it clean. Re-clone, or run `git add --renormalize .` after setting
+# core.autocrlf=false.
+* text=auto eol=lf
+
+# Redundant under the rule above, kept because it says why for shell scripts
+# specifically.
 scripts/*.sh text eol=lf
+
+# The exceptions. PowerShell and batch scripts ship to Windows; keep CRLF so they are
+# not silently normalised to LF by an edit made on macOS or Linux.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Git hooks are executed by `sh`, and a CR at the end of each line makes sh fail with
+# "command not found" -- under husky that propagates and BLOCKS THE PUSH. Verified: a CRLF
+# copy of the pre-push shim exits 127. core.autocrlf=true is the Git-for-Windows installer
+# default, so without this a Windows contributor cannot push at all, and the error points at
+# a line number that looks like a broken Node install rather than at line endings.
+.husky/** text eol=lf

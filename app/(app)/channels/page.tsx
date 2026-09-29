@@ -53,6 +53,7 @@ import {
   channelLastModified,
   channelDataType,
   channelSortValue,
+  newChannelPath,
 } from "./_lib/channel-helpers";
 import {
   useChannelOperations,
@@ -645,11 +646,7 @@ export default function ChannelsPage() {
         }
       }
     }
-    const path =
-      groupId && groupId !== DEFAULT_GROUP_ID
-        ? `/channels/new?groupId=${encodeURIComponent(groupId)}`
-        : "/channels/new";
-    router.push(path);
+    router.push(newChannelPath(groupId));
   }, [router, selectedGroupId, selectedIds, allGroupChannelMap]);
   const handleImportClick = useCallback(() => setImportOpen(true), []);
   const handleImportFromRepoClick = useCallback(() => setImportFromRepoOpen(true), []);
@@ -912,6 +909,7 @@ export default function ChannelsPage() {
                             onEdit={openEditGroup}
                             onDelete={openDeleteGroup}
                             onExport={openExportGroup}
+                            onNewChannel={(g) => router.push(newChannelPath(g.id))}
                             density={globalDensity}
                             onDeployAll={(g) => {
                               const ids = (allGroupChannelMap.get(g.id) ?? [])

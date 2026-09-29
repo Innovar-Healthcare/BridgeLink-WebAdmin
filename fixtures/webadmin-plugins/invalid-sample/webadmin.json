@@ -1,0 +1,22 @@
+{
+  "manifestVersion": 1,
+  "connectorPanels": [
+    {
+      "mode": "source",
+      "transportName": "Broken Panel",
+      "sections": [
+        {
+          "title": "Broken",
+          "fields": [
+            {
+              "key": "note",
+              "type": "text",
+              "label": "Note",
+              "html": "<b>manifests cannot carry HTML — this key makes the manifest invalid</b>"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

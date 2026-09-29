@@ -104,7 +104,7 @@ export function ImportChannelDialog({ open, onOpenChange }: ImportChannelDialogP
   async function handleImport() {
     if (selected.size === 0) return;
 
-    //: a single selection opens the channel in the editor for review
+    // a single selection opens the channel in the editor for review
     // before saving (mirrors the Java client, which opens an imported channel in
     // the editor). Bulk selections still import immediately — reviewing many
     // channels one at a time would be impractical, matching the Java client's

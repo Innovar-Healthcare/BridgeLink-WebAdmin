@@ -1,8 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 
 export type ViewDensity = "comfortable" | "default" | "compact";
+
+/**
+ * Optional per-subtree density override. Default `undefined` means "follow the
+ * global preference" — so every existing caller (none of which is wrapped in a
+ * provider) is unaffected. A provider (e.g. the Manifest Preview pane) can pin a
+ * density for just its subtree; `setViewDensity`/`cycleDensity` still mutate the
+ * GLOBAL preference, never the override.
+ */
+export const ViewDensityOverrideContext = createContext<ViewDensity | undefined>(undefined);
 
 /**
  * Returns the Tailwind height class for a form control (input, select, button) based on density.
@@ -72,10 +81,14 @@ export function useCompactMode() {
     setViewDensity(nextDensity(density));
   }
 
+  // A subtree override wins for reads; the setters still target the global.
+  const override = useContext(ViewDensityOverrideContext);
+  const effective = override ?? density;
+
   return {
-    viewDensity: density,
+    viewDensity: effective,
     /** True when density is "default" or "compact" — used for badge dot display. */
-    isCompact: density !== "comfortable",
+    isCompact: effective !== "comfortable",
     setViewDensity,
     cycleDensity,
   };

@@ -1,0 +1,23 @@
+{
+  "manifestVersion": 3,
+  "settingsPanels": [
+    {
+      "tabKey": "corpus-collections",
+      "tabLabel": "Corpus Collections",
+      "sections": [
+        {
+          "title": "Filters",
+          "fields": [
+            { "key": "allowedTypes", "type": "stringList", "label": "Allowed Types" },
+            { "key": "headers", "type": "map", "label": "Headers" }
+          ]
+        },
+        {
+          "title": "Advanced",
+          "presentation": "dialog",
+          "fields": [{ "key": "customHeaders", "type": "multimap", "label": "Custom Headers" }]
+        }
+      ]
+    }
+  ]
+}

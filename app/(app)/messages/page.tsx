@@ -38,6 +38,7 @@ import { useCompactMode, pagePadding } from "@/lib/hooks/use-compact-mode";
 import { buildAdvancedFilterFromUrl } from "./_lib/message-helpers";
 import { selectConnector } from "./_lib/message-selection";
 import { runMessageSearch, runMessagePage, type MessageSearchDeps } from "./_lib/message-search";
+import { clearMessageCache } from "./_lib/message-cache";
 import {
   useMessageActions,
   type ConfirmDialogState,
@@ -57,6 +58,7 @@ import {
   STATIC_MSG_COLS,
   hasAdvancedCriteria,
 } from "./_lib/message-columns";
+import { useChannelColumnVisibility } from "./_lib/use-channel-column-visibility";
 import { saveAdminPref, loadAdminPrefs } from "@/components/settings/admin-tab";
 import type { MsgCol } from "./_lib/message-columns";
 import {
@@ -64,6 +66,7 @@ import {
   emptyAdvancedFilter,
   hasMetaDataSearchErrors,
   reconcileConnectorSelection,
+  reconcileMetaDataSearchRows,
   DELETED_CONNECTORS_METADATA_ID,
   DELETED_CONNECTORS_LABEL,
 } from "@/components/messages/advanced-filter-panel";
@@ -122,10 +125,15 @@ function MessagesPageInner() {
   // effect-ordering race on channel switch. Empty string = not loaded / no channel.
   const [connectorsChannel, setConnectorsChannel] = useState("");
   const [metaDataColumns, setMetaDataColumns] = useState<MetaDataColumnInfo[]>([]);
-  // True once getMetaDataColumns has resolved or rejected for the selected channel.
-  // Manual Search is disabled until this is true so isCURESPHILoggingOn is final
-  // before we decide whether to run the PHI query audit (Finding 5,.
-  const [metaColumnsReady, setMetaColumnsReady] = useState(false);
+  // The channel whose metadata columns are currently loaded into metaDataColumns, set once
+  // getMetaDataColumns has resolved OR rejected for it. Compared against selectedChannelId rather
+  // than kept as a boolean for the same reason as connectorsChannel above: a flag can't distinguish
+  // "ready for this channel" from "still ready for the previous one", and it stays stale-true across
+  // a channel switch — long enough for the auto-search or a manual Search click to run with the
+  // previous channel's metadata rows and its isCURESPHILoggingOn determination
+  // (Finding 5,. Empty string = not loaded / no channel.
+  const [metaColumnsChannel, setMetaColumnsChannel] = useState("");
+  const metaColumnsLoaded = metaColumnsChannel === selectedChannelId;
 
   // ── CURES PHI audit — auto-detect from metadata columns (Java MessageBrowser:352-358) ──
   const isCURESPHILoggingOn = useMemo(
@@ -165,8 +173,28 @@ function MessagesPageInner() {
     return map;
   }, [metaDataColumns]);
 
-  const { colState, orderedCols, visibleCols, setWidth, setVisible, moveCol, resetToDefaults } =
-    useColumnConfig(allMsgCols, "bl-messages-cols-v1");
+  const {
+    colState,
+    orderedCols,
+    setWidth,
+    setVisible,
+    moveCol,
+    resetToDefaults: resetColDefaults,
+  } = useColumnConfig(allMsgCols, "bl-messages-cols-v1");
+
+  // Per-channel custom metadata column visibility layered on top finding 16).
+  const {
+    colState: channelColState,
+    visibleCols: channelVisibleCols,
+    setVisible: handleSetColVisible,
+    resetToDefaults,
+  } = useChannelColumnVisibility(
+    colState,
+    orderedCols,
+    setVisible,
+    selectedChannelId,
+    resetColDefaults
+  );
 
   // ── Reprocess destinations ──
   // Mirrors Java: DashboardPanel.getDestinationConnectorNames reads all channel destinations
@@ -277,6 +305,11 @@ function MessagesPageInner() {
   /** Monotonic token for search/pagination — prevents a slow in-flight search from
    *  overwriting results from a newer, faster search (wrong-channel PHI race). */
   const searchSeqRef = useRef(0);
+  /** Shared abort controller for search/page/count — mirrors Java grouping searchMessages,
+   *  getSearchCount, and removeMessages under one `abort(getAbortOperations())` call
+   *  (MessageBrowser.java:290, 910): starting any one of them cancels whichever of the others
+   *  was still in flight, and leaving the page (see the unmount effect below) cancels all. */
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // ── Selected message + content viewer ──
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
@@ -321,6 +354,15 @@ function MessagesPageInner() {
       }
     }
   }, [selectedChannelId]);
+
+  // ── Leaving the messages page: abort any in-flight search/page/count and drop the message
+  // cache, mirroring Java's ancestorRemoved (MessageBrowser.java:286-292). ──
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+      clearMessageCache();
+    };
+  }, []);
 
   // ── Load channels once ──
   useEffect(() => {
@@ -412,9 +454,9 @@ function MessagesPageInner() {
     // Wait for the channel's metadata columns to finish loading (resolved OR
     // rejected) before applying a metaDataColumn param, so buildAdvancedFilterFromUrl
     // can validate the column against the channel's real columns. Gating on
-    // metaColumnsReady (not `.length === 0`) also lets a zero-column / fetch-failed
+    // metaColumnsLoaded (not `.length === 0`) also lets a zero-column / fetch-failed
     // channel proceed and scrub, instead of blocking forever.
-    if (urlFilterParams.metaDataColumn && !metaColumnsReady) return;
+    if (urlFilterParams.metaDataColumn && !metaColumnsLoaded) return;
 
     appliedUrlFilterRef.current = true;
     // Disable the sibling metaDataId effect: the scrub below flips hasUrlFilterParams
@@ -450,7 +492,7 @@ function MessagesPageInner() {
     selectedChannelId,
     channelsLoading,
     metaDataColumns,
-    metaColumnsReady,
+    metaColumnsLoaded,
     urlFilterParams,
     initialMetaDataId,
     setAdvancedFilter,
@@ -522,6 +564,7 @@ function MessagesPageInner() {
   const searchDeps = useMemo<MessageSearchDeps>(
     () => ({
       seqRef: searchSeqRef,
+      abortControllerRef,
       activeFilterRef,
       activeChannelRef,
       setActiveFilter,
@@ -540,6 +583,7 @@ function MessagesPageInner() {
       setSelectedMessage,
       setFullMessage,
       setContentError,
+      setTotalCount,
     }),
     [channels, isCURESPHILoggingOn, pageSize]
   );
@@ -569,12 +613,17 @@ function MessagesPageInner() {
   // search always includes the pre-populated advanced filter. Also wait for the connector roster
   // (connectorsChannel === selectedChannelId) so the include/exclude split is computed against the
   // real roster, not an empty one — this filter also drives Remove/Reprocess Results).
+  // And wait for the metadata columns (metaColumnsLoaded) so the persisted metadata-search rows
+  // have been reconciled against this channel first. The two fetches are independent and race;
+  // whenever connectorNames wins we would otherwise search with the previous channel's columnName,
+  // which the server interpolates raw into SQL and answers with a 500.
   useEffect(() => {
     if (
       selectedChannelId &&
       !channelsLoading &&
       urlParamsApplied &&
-      connectorsChannel === selectedChannelId
+      connectorsChannel === selectedChannelId &&
+      metaColumnsLoaded
     ) {
       isFirstLoadSearchRef.current = true;
       // A fresh channel auto-load is not a user search — refuse export until the user searches.
@@ -587,32 +636,50 @@ function MessagesPageInner() {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChannelId, channelsLoading, urlParamsApplied, connectorsChannel]);
+  }, [selectedChannelId, channelsLoading, urlParamsApplied, connectorsChannel, metaColumnsLoaded]);
 
   // ── Fetch metadata columns when channel changes ──
   useEffect(() => {
     if (!selectedChannelId) {
       startTransition(() => {
         setMetaDataColumns([]);
-        setMetaColumnsReady(false);
+        setMetaColumnsChannel("");
       });
       return;
     }
-    // Reset so manual Search is blocked until the fetch resolves. This ensures
-    // isCURESPHILoggingOn is final before we decide whether to record a PHI
-    // query audit Finding 5).
-    startTransition(() => setMetaColumnsReady(false));
+    // `cancelled` matters more here than the cosmetic wrong-columns flash it prevents: without it,
+    // an A -> B -> A switch where B's fetch resolves late would run the reconcile below against
+    // B's columns and silently delete criteria that are valid for A.
+    let cancelled = false;
     getMetaDataColumns(selectedChannelId)
       .then((cols) => {
-        setMetaDataColumns(cols.map((c) => ({ name: c.name, type: c.type })));
+        if (cancelled) return;
+        const next = cols.map((c) => ({ name: c.name, type: c.type }));
+        setMetaDataColumns(next);
+        // Drop any persisted metadata-search rows this channel can't satisfy. Success
+        // path only: the catch below sets [] for a failed fetch, which is indistinguishable from
+        // "this channel has no custom columns" — reconciling there would wipe the user's criteria
+        // on a transient network error. Deliberately NOT inside startTransition: the gate set in
+        // .finally() is a default-lane update, and splitting the two across lanes would let the
+        // gate commit first and reopen the race this reconcile exists to close.
+        setAdvancedFilter((prev) => {
+          const rows = reconcileMetaDataSearchRows(prev.metaDataSearchRows, next);
+          return rows === prev.metaDataSearchRows ? prev : { ...prev, metaDataSearchRows: rows };
+        });
       })
       .catch(() => {
-        setMetaDataColumns([]);
+        if (!cancelled) setMetaDataColumns([]);
       })
       .finally(() => {
-        setMetaColumnsReady(true);
+        // Open the auto-search / manual-Search gate whether the fetch succeeded or failed. Runs
+        // after the .then above, so the gate can never open in a commit earlier than the one
+        // carrying the reconcile.
+        if (!cancelled) setMetaColumnsChannel(selectedChannelId);
       });
-  }, [selectedChannelId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedChannelId, setAdvancedFilter]);
 
   // ── Fetch the channel's authoritative connector list when the channel changes ──
   // Mirrors Java Frame.doShowMessages (mirthClient.getConnectorNames) + MessageBrowser.loadChannel
@@ -665,11 +732,21 @@ function MessagesPageInner() {
   // ── Count (lazy) ──
   const handleCount = useCallback(async () => {
     if (!activeFilterRef.current || !activeChannelRef.current) return;
+    // Same abortable group as search/page (Java: MessageBrowser.java:290, 910) — a Count click
+    // supersedes whatever search/page/count was still in flight.
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
     setCountLoading(true);
     try {
-      const count = await searchMessageCount(activeChannelRef.current, activeFilterRef.current);
+      const count = await searchMessageCount(
+        activeChannelRef.current,
+        activeFilterRef.current,
+        controller.signal
+      );
       setTotalCount(count);
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
       setTotalCount(null);
     } finally {
       setCountLoading(false);
@@ -722,6 +799,7 @@ function MessagesPageInner() {
       setFullMessage,
       setContentError,
       setContentLoading,
+      includedMetaDataIds: activeFilterRef.current?.includedMetaDataIds,
     });
   }
 
@@ -763,8 +841,9 @@ function MessagesPageInner() {
     selectedChannelState: selectedChannelStatus?.state,
     page,
     reprocessMode,
-    visibleCols,
+    visibleCols: channelVisibleCols,
     activeFilterRef,
+    activeChannelRef,
     userHasSearchedRef,
     search,
     setActionLoading,
@@ -831,7 +910,10 @@ function MessagesPageInner() {
           setChannelSearch("");
           // Connector selection is channel-specific (metaDataIds mean different things per channel),
           // so reset it to "all" on an interactive switch — mirrors Java rebuilding the connector
-          // table per channel. Other advanced fields (dates, ids, etc.) intentionally persist.
+          // table per channel. Metadata-search rows are channel-specific too, but can only be
+          // judged once the new channel's columns arrive, so the metadata-columns effect reconciles
+          // them rather than this handler. Other advanced fields (dates, ids, etc.)
+          // intentionally persist.
           setAdvancedFilter((prev) =>
             prev.selectedConnectors === null ? prev : { ...prev, selectedConnectors: null }
           );
@@ -861,6 +943,11 @@ function MessagesPageInner() {
         connectorInfos={connectorInfos}
         metaDataColumns={metaDataColumns}
         onSearch={() => {
+          // The Search button is disabled until the channel's metadata columns land, but Enter in
+          // the Text Search field calls this directly and would slip past that: the
+          // persisted metadata rows are not yet reconciled, so the search would carry the previous
+          // channel's columnName and 500. Silently ignore, matching the disabled button.
+          if (!metaColumnsLoaded) return;
           // Java MessageBrowserAdvancedFilter blocks the search on an invalid
           // metadata-search value; mirror that by surfacing the inline errors.
           if (hasMetaDataSearchErrors(advancedFilter)) {
@@ -876,7 +963,7 @@ function MessagesPageInner() {
         }}
         onReset={resetFilters}
         loading={loading}
-        metaColumnsReady={metaColumnsReady}
+        metaColumnsLoaded={metaColumnsLoaded}
         hasActiveFilters={hasActiveFilters}
         pageSizeInput={pageSizeInput}
         onPageSizeInputChange={setPageSizeInput}
@@ -939,11 +1026,11 @@ function MessagesPageInner() {
             <MessageTable
               messages={messages}
               metaColTypes={metaColTypes}
-              visibleCols={visibleCols}
+              visibleCols={channelVisibleCols}
               orderedCols={orderedCols}
-              colState={colState}
+              colState={channelColState}
               setWidth={setWidth}
-              setVisible={setVisible}
+              setVisible={handleSetColVisible}
               moveCol={moveCol}
               resetToDefaults={resetToDefaults}
               page={page}

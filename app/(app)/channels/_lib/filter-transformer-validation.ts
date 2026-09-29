@@ -19,7 +19,12 @@ import type {
 import { parseFilterFromXml, parseTransformerFromXml } from "./filter-transformer-xml";
 import { tryParseJs } from "@/lib/js-validation";
 import { parseSourceConnectorFromXml, parseDestinationConnectorsFromXml } from "./channel-xml";
-import { validateStepInRegistry } from "./filter-transformer-steps";
+import { resolveStep } from "./filter-transformer-steps";
+import {
+  scriptErrorMessage,
+  serverSupportsScriptValidation,
+  validateScriptsBatch,
+} from "@/lib/api/api-script-validation";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -68,17 +73,39 @@ function isRule(el: Rule | Step): el is Rule {
 }
 
 /**
- * Validate a single rule or step.
- * Returns null if valid, or a human-readable error message.
- *
- * Step validation is delegated to the step registry — each
- * TransformerStepDefinition owns its own `validate()` function. Filter rules
- * stay hardcoded pending a future rule registry.
+ * The JavaScript source an element contributes to server-side (Rhino) syntax validation, or
+ * `null` when it carries none. Only JavaScript filter rules and JavaScript
+ * transformer steps carry a script — this matches exactly what the client-side acorn path
+ * validates today, so routing it through the server changes accuracy, not coverage. Steps built
+ * from structured fields (Mapper, Message Builder, …) keep validating those fields via
+ * {@link validateElementNonScript}; validating their *generated* scripts too would be a wider
+ * parity change and is deliberately out of scope here.
  */
-export function validateElement(el: Rule | Step): string | null {
+export function getElementScript(el: Rule | Step): string | null {
   if (!isRule(el)) {
-    // Transformer steps: ask the registry.
-    return validateStepInRegistry(el as Step);
+    const step = el as Step;
+    return resolveStep(step.type)?.getScript?.(step) ?? null;
+  }
+  if (el.type === "JavaScript") return (el as JavaScriptRule).script;
+  return null;
+}
+
+/**
+ * Structural (non-script) validation for a single rule or step — synchronous and local.
+ * Returns null when valid, or a human-readable error message. The JS-parse of elements that
+ * carry a script ({@link getElementScript}) is handled separately (acorn in {@link
+ * validateElement}, or the server batch in the channel-wide async path), so it is NOT repeated
+ * here — an element with a script contributes no structural error. Mirrors the structural half
+ * of Java `BaseEditorPane.validateElement` (plugin.checkProperties before the script compile).
+ */
+export function validateElementNonScript(el: Rule | Step): string | null {
+  if (!isRule(el)) {
+    const step = el as Step;
+    const def = resolveStep(step.type);
+    if (!def) return null;
+    // A step that carries a script defers its parse to getElementScript; its registry
+    // validate() IS that parse (JavaScript step), so skip it here to avoid double-reporting.
+    return def.getScript ? null : def.validate(step);
   }
 
   // Filter rules
@@ -91,13 +118,9 @@ export function validateElement(el: Rule | Step): string | null {
       if (!r.field?.trim()) return "Field cannot be empty.";
       return null;
     }
-    case "JavaScript": {
-      // Java JavaScriptRulePanel.checkProperties compiles the script and blocks only
-      // on a compile error — a blank script compiles fine, so it is legal. We keep
-      // the JS-parse check (mirrors the Rhino compile) but drop the required check.
-      const j = el as JavaScriptRule;
-      return tryParseJs(j.script);
-    }
+    case "JavaScript":
+      // Script handled by getElementScript; no structural check.
+      return null;
     case "External Script": {
       const s = el as ExternalScriptRule;
       if (!s.scriptPath?.trim()) return "Script path cannot be empty.";
@@ -114,125 +137,203 @@ export function validateElement(el: Rule | Step): string | null {
   }
 }
 
+/**
+ * Validate a single rule or step (synchronous, acorn). Returns null if valid, or a
+ * human-readable error message. Composes the structural check with the client-side JS parse —
+ * the behavior the live editor, per-element Validate buttons, and render-time auto-validate
+ * rely on. The channel-wide save/enable path instead batches {@link getElementScript} to the
+ * server and reuses {@link validateElementNonScript} for the structural half.
+ */
+export function validateElement(el: Rule | Step): string | null {
+  const structural = validateElementNonScript(el);
+  if (structural) return structural;
+  const script = getElementScript(el);
+  return script != null ? tryParseJs(script) : null;
+}
+
 // ─── Recursive element list validation ───────────────────────────────────────
 
-interface ElementError {
+/**
+ * One validation slot in tree order. A structural error has `message` set and `scriptId` null.
+ * A JavaScript element that needs a Rhino/acorn parse has `message` null and `scriptId` set —
+ * its `message` is filled by {@link resolveScriptSlots} after the (possibly batched) parse.
+ * Elements with no error and no script produce no slot. Keeping every element as an ordered slot
+ * preserves the exact tree order the synchronous validator produced, even though scripts resolve
+ * after the walk.
+ */
+export interface ScriptSlot {
+  location: string;
   elementName: string;
   elementType: string;
-  message: string;
+  message: string | null;
+  scriptId: string | null;
+}
+
+/** Accumulator threaded through the recursive walk. */
+interface SlotCollector {
+  slots: ScriptSlot[];
+  scripts: Record<string, string>;
+  next: number;
 }
 
 /**
- * Validate a list of rules or steps, recursing into Iterator children.
+ * Walk a list of rules or steps in tree order, recursing into Iterator children, appending a
+ * {@link ScriptSlot} for each element that has a structural error or a script to parse.
  *
- * `ancestorIndexVars` carries the index variables of the enclosing Iterators, so
- * a nested Iterator that reuses an ancestor's index variable is flagged. This
- * mirrors Java's BaseEditorPane.validateElementRecursive (BaseEditorPane.java:842-867),
- * which walks a Deque of ancestor index variables — the check is ancestor-only,
- * so two *sibling* Iterators may share an index variable without colliding.
+ * `ancestorIndexVars` carries the index variables of the enclosing Iterators, so a nested
+ * Iterator that reuses an ancestor's index variable is flagged. Mirrors Java's
+ * BaseEditorPane.validateElementRecursive (BaseEditorPane.java:842-867) — the check is
+ * ancestor-only, so two *sibling* Iterators may share an index variable without colliding.
  */
-function validateElements(
+function collectElementSlots(
   elements: (Rule | Step)[],
+  location: string,
+  acc: SlotCollector,
   ancestorIndexVars: string[] = []
-): ElementError[] {
-  const errors: ElementError[] = [];
+): void {
   for (const el of elements) {
-    const msg = validateElement(el);
-    if (msg) {
-      errors.push({ elementName: el.name, elementType: el.type, message: msg });
+    const structural = validateElementNonScript(el);
+    if (structural) {
+      acc.slots.push({
+        location,
+        elementName: el.name,
+        elementType: el.type,
+        message: structural,
+        scriptId: null,
+      });
+    } else {
+      const script = getElementScript(el);
+      if (script != null) {
+        const id = String(acc.next++);
+        acc.scripts[id] = script;
+        acc.slots.push({
+          location,
+          elementName: el.name,
+          elementType: el.type,
+          message: null,
+          scriptId: id,
+        });
+      }
     }
     // Recurse into Iterator children, tracking index variables down the tree.
     if (el.type === "Iterator") {
       const iter = el as IteratorRule | IteratorStep;
       const indexVariable = iter.indexVariable?.trim();
       if (indexVariable && ancestorIndexVars.includes(indexVariable)) {
-        errors.push({
+        acc.slots.push({
+          location,
           elementName: el.name,
           elementType: el.type,
           message: `Duplicate Iterator index variable ${indexVariable} found.`,
+          scriptId: null,
         });
       }
       if (iter.children?.length) {
-        const childErrors = validateElements(iter.children, [
+        collectElementSlots(iter.children, location, acc, [
           ...ancestorIndexVars,
           ...(indexVariable ? [indexVariable] : []),
         ]);
-        errors.push(...childErrors);
       }
     }
   }
-  return errors;
 }
 
 // ─── Channel-level validation ────────────────────────────────────────────────
 
 /**
- * Validate all filter rules and transformer steps in a full channel XML string.
- * Parses source and destination connectors, then validates each filter/transformer.
- * Returns an array of errors with location context for display.
+ * Collect the filter/transformer validation of a full channel into ordered {@link ScriptSlot}s
+ * and the map of scripts to parse. Structural errors are resolved inline; JavaScript scripts are
+ * left pending so a caller can batch them (optionally alongside other scripts, e.g. the channel
+ * scripts on the enable path) in one {@link resolveScriptSlots} call. Exported so the enable
+ * validator can share a single batch round-trip.
  */
-export function validateChannelFiltersAndTransformers(channelXml: string): FtValidationError[] {
-  const allErrors: FtValidationError[] = [];
+export function collectChannelFtSlots(channelXml: string): {
+  slots: ScriptSlot[];
+  scripts: Record<string, string>;
+} {
+  const acc: SlotCollector = { slots: [], scripts: {}, next: 0 };
 
-  // Source connector
+  const walk = (
+    xml: string | null | undefined,
+    location: string,
+    parse: (x: string) => { elements: (Rule | Step)[] }
+  ) => {
+    if (!xml) return;
+    try {
+      collectElementSlots(parse(xml).elements, location, acc);
+    } catch {
+      // Malformed XML — skip; serialization fails elsewhere with a clearer error.
+    }
+  };
+
   const src = parseSourceConnectorFromXml(channelXml);
-  if (src.filterXml) {
-    try {
-      const filter = parseFilterFromXml(src.filterXml);
-      for (const err of validateElements(filter.elements)) {
-        allErrors.push({ location: "Source Filter", ...err });
-      }
-    } catch {
-      // If XML is malformed, skip — serialization will fail elsewhere
-    }
-  }
-  if (src.transformerXml) {
-    try {
-      const transformer = parseTransformerFromXml(src.transformerXml);
-      for (const err of validateElements(transformer.elements)) {
-        allErrors.push({ location: "Source Transformer", ...err });
-      }
-    } catch {
-      // skip
-    }
-  }
+  walk(src.filterXml, "Source Filter", parseFilterFromXml);
+  walk(src.transformerXml, "Source Transformer", parseTransformerFromXml);
 
-  // Destination connectors
-  const dests = parseDestinationConnectorsFromXml(channelXml);
-  for (const dest of dests) {
+  for (const dest of parseDestinationConnectorsFromXml(channelXml)) {
     const destLabel = `Destination "${dest.name}"`;
-
-    if (dest.filterXml) {
-      try {
-        const filter = parseFilterFromXml(dest.filterXml);
-        for (const err of validateElements(filter.elements)) {
-          allErrors.push({ location: `${destLabel} Filter`, ...err });
-        }
-      } catch {
-        // skip
-      }
-    }
-    if (dest.transformerXml) {
-      try {
-        const transformer = parseTransformerFromXml(dest.transformerXml);
-        for (const err of validateElements(transformer.elements)) {
-          allErrors.push({ location: `${destLabel} Transformer`, ...err });
-        }
-      } catch {
-        // skip
-      }
-    }
-    if (dest.responseTransformerXml) {
-      try {
-        const transformer = parseTransformerFromXml(dest.responseTransformerXml);
-        for (const err of validateElements(transformer.elements)) {
-          allErrors.push({ location: `${destLabel} Response Transformer`, ...err });
-        }
-      } catch {
-        // skip
-      }
-    }
+    walk(dest.filterXml, `${destLabel} Filter`, parseFilterFromXml);
+    walk(dest.transformerXml, `${destLabel} Transformer`, parseTransformerFromXml);
+    walk(dest.responseTransformerXml, `${destLabel} Response Transformer`, parseTransformerFromXml);
   }
 
-  return allErrors;
+  return { slots: acc.slots, scripts: acc.scripts };
+}
+
+/**
+ * Resolve every pending script slot's `message` — server-side (real Rhino, one batch call) when
+ * the connected Core supports it, else via the acorn fallback. Mutates the slots in
+ * place. Callers may pass extra script slots (and their scripts) beyond the filter/transformer
+ * ones so a single round-trip covers everything (e.g. the channel scripts on enable).
+ */
+export async function resolveScriptSlots(
+  slots: ScriptSlot[],
+  scripts: Record<string, string>
+): Promise<void> {
+  const pending = slots.filter((s) => s.scriptId != null);
+  if (pending.length === 0) return;
+
+  if (serverSupportsScriptValidation()) {
+    const results = await validateScriptsBatch(scripts);
+    for (const slot of pending) {
+      slot.message = scriptErrorMessage(results[slot.scriptId as string]);
+    }
+    return;
+  }
+
+  // TRANSITIONAL FALLBACK — client-side acorn path for Core older than the endpoint.
+  // Delete once MIN_SUPPORTED_SERVER_VERSION >= MIN_SERVER_VALIDATE_SCRIPTS.
+  for (const slot of pending) {
+    slot.message = tryParseJs(scripts[slot.scriptId as string]);
+  }
+}
+
+/** Ordered slots → the display error list, dropping slots that resolved clean. */
+function slotsToFtErrors(slots: ScriptSlot[]): FtValidationError[] {
+  const errors: FtValidationError[] = [];
+  for (const s of slots) {
+    if (s.message) {
+      errors.push({
+        location: s.location,
+        elementName: s.elementName,
+        elementType: s.elementType,
+        message: s.message,
+      });
+    }
+  }
+  return errors;
+}
+
+/**
+ * Validate all filter rules and transformer steps in a full channel XML string. Structural
+ * checks run locally; JavaScript scripts are validated with the server's Rhino engine in one
+ * batch call when the Core supports it, else via the acorn fallback. Returns errors
+ * with location context, in tree order.
+ */
+export async function validateChannelFiltersAndTransformers(
+  channelXml: string
+): Promise<FtValidationError[]> {
+  const { slots, scripts } = collectChannelFtSlots(channelXml);
+  await resolveScriptSlots(slots, scripts);
+  return slotsToFtErrors(slots);
 }

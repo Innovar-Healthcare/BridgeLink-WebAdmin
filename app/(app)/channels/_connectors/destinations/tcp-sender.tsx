@@ -468,6 +468,7 @@ function TcpSenderBottomSection({
           ackBytes: local.ackBytes,
           nackBytes: local.nackBytes,
           maxRetries: local.maxRetries,
+          extra: local.extra,
         }}
         onSave={(updated) => commit({ ...local, ...updated })}
       />

@@ -1,0 +1,31 @@
+{
+  "manifestVersion": 2,
+  "transmissionModes": [
+    {
+      "name": "Corpus Mode",
+      "displayName": "Corpus Framing",
+      "propertiesClass": "com.example.corpus.CorpusModeProperties",
+      "defaultStartBytes": "0B",
+      "defaultEndBytes": "1C0D",
+      "fields": [
+        {
+          "key": "useChecksum",
+          "type": "checkbox",
+          "label": "Use Checksum",
+          "defaultValue": "false"
+        },
+        {
+          "key": "checksumAlgorithm",
+          "type": "select",
+          "label": "Checksum Algorithm",
+          "defaultValue": "crc32",
+          "visibleWhen": { "field": "useChecksum", "op": "truthy" },
+          "options": [
+            { "value": "crc32", "label": "CRC-32" },
+            { "value": "adler32", "label": "Adler-32" }
+          ]
+        }
+      ]
+    }
+  ]
+}

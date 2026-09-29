@@ -52,7 +52,6 @@ function HL7V3PropertiesSection({
   onChange,
   side,
   transformerType,
-  isDark,
   channelId,
 }: DataTypePropertiesSectionProps) {
   const xml = propsXml ?? "";
@@ -146,7 +145,6 @@ function HL7V3PropertiesSection({
             setBatchScript(v);
             update("batchProperties > batchScript", v);
           }}
-          isDark={isDark}
           channelId={channelId}
           contextType="CHANNEL_BATCH"
         />

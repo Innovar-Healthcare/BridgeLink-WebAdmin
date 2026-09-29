@@ -12,10 +12,38 @@ import type { User } from "@/lib/types";
 
 interface Props {
   user: User;
-  /** Non-empty when the login was SUCCESS_GRACE_PERIOD — makes password fields required. */
+  /**
+   * Non-empty when the login was also SUCCESS_GRACE_PERIOD — shown as a banner.
+   * It does NOT gate the password fields: a first login always requires a new
+   * password.
+   */
   gracePeriodMsg: string;
+  /**
+   * True when a compliant password was already set on the grace-period screen
+   * immediately before this one, so the password fields are hidden and skipped.
+   * Mirrors the Java client's `new FirstLoginDialog(currentUser, !passwordChanged)`
+   * — "the password is already compliant if it was changed above, so don't ask
+   * twice" (LoginPanel.handleSuccess). Only reachable when the server confines
+   * grace sessions via `password.restrictgracesessions`, which is what forces the
+   * password change into a separate earlier screen. Defaults to false,
+   * so the ordinary first-login flow is unchanged.
+   */
+  passwordAlreadyChanged?: boolean;
   onSuccess: () => void;
   onLogout: () => void;
+}
+
+/**
+ * Formats the server's password-policy violations the way the Java client does
+ * (Frame.checkOrUpdateUserPassword) — a header line, then one " - " bullet per
+ * violation. Rendered in a `whitespace-pre-wrap` banner so the bullets stay on
+ * separate lines.
+ */
+function formatPasswordViolations(violations: string[]): string {
+  return [
+    "Your password is not valid. Please fix the following:",
+    ...violations.map((v) => ` - ${v}`),
+  ].join("\n");
 }
 
 // First-login screen hard-codes compact density regardless of the global setting:
@@ -25,9 +53,13 @@ const DENSITY = "compact" as const;
 const SELECT_CLASS =
   "h-7 w-full rounded-md border border-input bg-background px-2.5 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:border-ring dark:bg-input/30 disabled:opacity-50";
 
-export function FirstLoginScreen({ user, gracePeriodMsg, onSuccess, onLogout }: Props) {
-  const passwordRequired = gracePeriodMsg !== "";
-
+export function FirstLoginScreen({
+  user,
+  gracePeriodMsg,
+  passwordAlreadyChanged = false,
+  onSuccess,
+  onLogout,
+}: Props) {
   // Profile fields
   const [username, setUsername] = useState(user.username);
   const [firstName, setFirstName] = useState(user.firstName ?? "");
@@ -51,21 +83,44 @@ export function FirstLoginScreen({ user, gracePeriodMsg, onSuccess, onLogout }: 
     e.preventDefault();
     setError("");
 
+    // The password fields carry native `required`, so the browser blocks an empty
+    // submit before this runs; these guards cover programmatic submits.
     if (!username.trim()) {
       setError("Username is required.");
       return;
     }
-    if (passwordRequired && !newPassword) {
-      setError("You must set a new password before continuing.");
-      return;
-    }
-    if (newPassword && newPassword !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
+    if (!passwordAlreadyChanged) {
+      if (!newPassword) {
+        setError("You must set a new password before continuing.");
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        setError("Passwords do not match.");
+        return;
+      }
     }
 
     setLoading(true);
     try {
+      // Password first, profile second — mirrors the Java client's
+      // Frame.updateCurrentUser. Two reasons, and both must hold:
+      //   - a policy rejection must leave nothing behind; committing the profile
+      //     first would persist an edited (possibly renamed) user while the
+      //     screen stays open;
+      //   - when the server confines the session via
+      //     `password.restrictgracesessions`, updateUserPassword is one of the
+      //     few calls it permits and updateUser is not. The successful password
+      //     change is what lifts the restriction, so it has to go first or the
+      //     profile write below comes back 403.
+      // Do not reorder these.
+      if (!passwordAlreadyChanged) {
+        const violations = await updateUserPassword(user.id, newPassword);
+        if (violations.length > 0) {
+          setError(formatPasswordViolations(violations));
+          return;
+        }
+      }
+
       await updateUser(user.id, {
         id: user.id,
         username: username.trim(),
@@ -82,15 +137,13 @@ export function FirstLoginScreen({ user, gracePeriodMsg, onSuccess, onLogout }: 
         strikeCount: user.strikeCount,
       });
 
-      if (newPassword) {
-        const errors = await updateUserPassword(user.id, newPassword);
-        if (errors.length > 0) {
-          setError(errors.join(" "));
-          return;
-        }
+      if (!(await setUserPreference(user.id, "firstlogin", "false"))) {
+        setError(
+          "Your password and profile were saved, but the first-login flag could not be " +
+            "cleared. You may be prompted to set a new password again on your next login."
+        );
+        return;
       }
-
-      await setUserPreference(user.id, "firstlogin", "false");
 
       onSuccess();
     } catch (err) {
@@ -112,16 +165,16 @@ export function FirstLoginScreen({ user, gracePeriodMsg, onSuccess, onLogout }: 
           Welcome to BridgeLink
         </h2>
         <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-          {passwordRequired
-            ? "Set a new password and review your profile to continue."
-            : "Please complete your profile. All fields are optional unless noted."}
+          {passwordAlreadyChanged
+            ? "Your password has been changed. Review your profile to continue."
+            : "Set a new password and review your profile to continue."}
         </p>
       </div>
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-5 py-3">
         {/* Grace-period warning — pinned just under the header so it's always visible */}
-        {passwordRequired && (
+        {gracePeriodMsg !== "" && (
           <div className="mb-3 rounded border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-400">
             {gracePeriodMsg}
           </div>
@@ -143,33 +196,37 @@ export function FirstLoginScreen({ user, gracePeriodMsg, onSuccess, onLogout }: 
             </FormField>
           </div>
 
-          {/* New Password */}
-          <FormField label="New Password" required={passwordRequired} density={DENSITY}>
-            <SecretInput
-              density={DENSITY}
-              revealable
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              autoComplete="new-password"
-              required={passwordRequired}
-              placeholder={passwordRequired ? "" : "Leave blank to keep current"}
-              disabled={loading}
-            />
-          </FormField>
+          {/* New Password + Confirm — always required on a first login,
+              except when the grace-period screen already set one. */}
+          {!passwordAlreadyChanged && (
+            <>
+              <FormField label="New Password" required density={DENSITY}>
+                <SecretInput
+                  density={DENSITY}
+                  revealable
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  autoComplete="new-password"
+                  required
+                  data-testid="first-login-new-password"
+                  disabled={loading}
+                />
+              </FormField>
 
-          {/* Confirm Password */}
-          <FormField label="Confirm Password" required={passwordRequired} density={DENSITY}>
-            <SecretInput
-              density={DENSITY}
-              revealable
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              autoComplete="new-password"
-              required={passwordRequired}
-              placeholder={passwordRequired ? "" : "Leave blank to keep current"}
-              disabled={loading}
-            />
-          </FormField>
+              <FormField label="Confirm Password" required density={DENSITY}>
+                <SecretInput
+                  density={DENSITY}
+                  revealable
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                  required
+                  data-testid="first-login-confirm-password"
+                  disabled={loading}
+                />
+              </FormField>
+            </>
+          )}
 
           {/* First Name */}
           <FormField label="First Name" density={DENSITY}>
@@ -295,7 +352,7 @@ export function FirstLoginScreen({ user, gracePeriodMsg, onSuccess, onLogout }: 
         </div>
 
         {error && (
-          <div className="mt-3 rounded border border-red-200 dark:border-red-700 bg-red-50 dark:bg-red-900/30 px-3 py-1.5 text-xs text-red-700 dark:text-red-400">
+          <div className="mt-3 rounded border border-red-200 dark:border-red-700 bg-red-50 dark:bg-red-900/30 px-3 py-1.5 text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap">
             {error}
           </div>
         )}

@@ -34,6 +34,28 @@ export function getStoredViewerLayout(): "right" | "bottom" {
   return v === "bottom" || v === "right" ? v : "right";
 }
 
+/**
+ * Per-channel hidden custom-metadata-column keys, mirroring Java's customHiddenColumnMap
+ * (`Map<channelId, Set<columnName>>`, MessageBrowser.java:363-376) — hiding a metadata column on
+ * one channel must not hide the identically-named column on another. Static columns stay on the
+ * single global `bl-messages-cols-v1` key (via useColumnConfig), same as Java's fixed columns.
+ */
+export const LOCAL_STORAGE_HIDDEN_META_COLS_KEY = "bl-messages-hidden-meta-cols-v1";
+
+export type HiddenMetaColsByChannel = Record<string, string[]>;
+
+export function getStoredHiddenMetaCols(): HiddenMetaColsByChannel {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_HIDDEN_META_COLS_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as HiddenMetaColsByChannel) : {};
+  } catch {
+    return {};
+  }
+}
+
 export const MESSAGE_STATUSES = [
   "RECEIVED",
   "TRANSFORMED",

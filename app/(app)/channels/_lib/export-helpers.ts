@@ -2,6 +2,21 @@
  * Shared helpers for channel/group export dialogs.
  */
 
+import { loadAdminPrefs } from "@/components/settings/admin-tab";
+
+/**
+ * Resolves the "Export code template libraries with channels" admin pref to an
+ * auto-answer: true/false to skip the confirm prompt and export immediately
+ * (matching the Java UI's ChannelPanel.java), or null when the pref is "ask"/unset
+ * and the confirm prompt should still be shown.
+ */
+export function resolveExportLibrariesAutoAnswer(): boolean | null {
+  const pref = loadAdminPrefs().exportChannelCodeTemplateLibraries;
+  if (pref === "yes") return true;
+  if (pref === "no") return false;
+  return null;
+}
+
 /**
  * Strip empty exportData sub-elements from channel XML to match Java UI export output.
  *

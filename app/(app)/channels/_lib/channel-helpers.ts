@@ -6,6 +6,19 @@
 import type { Channel, ChannelGroup, DashboardStatus } from "@/lib/types";
 import type { ChannelMetadata } from "@/lib/cache-store";
 import type { ChanCol } from "./channel-columns";
+import { DEFAULT_GROUP_ID } from "./channel-columns";
+
+/**
+ * Route for creating a new channel, optionally scoped to a group. A named group id
+ * pre-scopes the new channel to that group (the editor assigns membership on save);
+ * a null id or the virtual default group creates an ungrouped channel. Shared by the
+ * toolbar "New" button and the group / channel-in-group right-click "New Channel" items.
+ */
+export function newChannelPath(groupId: string | null): string {
+  return groupId && groupId !== DEFAULT_GROUP_ID
+    ? `/channels/new?groupId=${encodeURIComponent(groupId)}`
+    : "/channels/new";
+}
 
 /** Channel extended with dashboard status fields for display. */
 export interface EnrichedChannel extends Channel {

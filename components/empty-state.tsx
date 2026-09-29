@@ -39,8 +39,11 @@ export function EmptyState({
       )}
     >
       {icon}
-      <span className="text-sm">{displayMessage}</span>
-      {description && <span className="text-xs mt-1">{description}</span>}
+      {/* Block-level, not inline: without an icon the wrapper is a plain
+          `text-center` block, so inline children would run the description straight into the
+          message and `mt-1` would be a no-op. With an icon both are flex items either way. */}
+      <div className="text-sm">{displayMessage}</div>
+      {description && <div className="text-xs mt-1">{description}</div>}
     </div>
   );
 }

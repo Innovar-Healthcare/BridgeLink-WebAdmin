@@ -226,6 +226,41 @@ export function usePluginSurfaceEnabled(): (gate: SurfaceGate | string | undefin
 }
 
 /**
+ * Returns a predicate: is this surface present on the server but blocked *only*
+ * by licensing? That is the "locked" state — the one worth showing an upgrade
+ * prompt for.
+ *
+ * Deliberately narrower than `!usePluginSurfaceEnabled()`, which is also false
+ * when the plugin is not installed at all. Those two must not be collapsed: an
+ * absent plugin should stay absent (404 / no nav item), because advertising an
+ * upgrade for something the server does not even have is noise. Only an
+ * installed-and-enabled-but-unlicensed surface is lockable.
+ */
+export function usePluginSurfaceLocked(): (gate: SurfaceGate | string | undefined) => boolean {
+  const enabledPlugins = useEnabledPluginNames();
+  const vhEnabled = useVersionHistoryEnabled();
+  const licensed = useLicensedPluginIds();
+  const licenseReady = useLicensedPluginsReady();
+  return (gate) => {
+    const { pluginName, licensedPluginId } = toGate(gate);
+    if (!licensedPluginId) return false;
+    // Never claim "locked" before the license state is known. The enablement and license stores
+    // resolve independently, so on a LICENSED server the enablement set can land first — and
+    // without this guard the surface would briefly satisfy installed-but-not-yet-licensed and
+    // flash a lock at a paying customer on every navigation. Hiding until we know is the safe
+    // direction, and matches how the enabled gate already behaves while loading.
+    if (!licenseReady) return false;
+    if (licensed.has(licensedPluginId)) return false;
+    if (pluginName) {
+      const serverOk =
+        pluginName === VERSION_HISTORY_PLUGIN_NAME ? vhEnabled : enabledPlugins.has(pluginName);
+      if (!serverOk) return false;
+    }
+    return true;
+  };
+}
+
+/**
  * Whether the gating signals for a surface have resolved. Used by the /p/[slug]
  * route to avoid flashing notFound (or mounting a page that fails its API calls)
  * while a relevant cache is still loading. Awaits whichever gates the surface

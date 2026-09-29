@@ -168,5 +168,28 @@ export interface ConnectorPluginDefinition {
   Section: ComponentType<ConnectorSectionProps>;
   injectDefaults?: (transportName: string, propertiesXml: string) => string;
   validate?: (propertiesXml: string | null) => ValidationError[];
+  /**
+   * Structural-only validation for the channel Save/Enable trust gate — excludes any
+   * JS syntax check, which is contributed separately via {@link getScript} and resolved through
+   * the server's Rhino batch (or the acorn fallback on Core older than the endpoint). Falls back
+   * to {@link validate} when a plugin hasn't split its checks. Mirrors filter-transformer's
+   * `validateElementNonScript`. The advisory "Validate Connector" button keeps using `validate`.
+   */
+  validateNonScript?: (propertiesXml: string | null) => ValidationError[];
+  /**
+   * The JavaScript source this plugin instance contributes to server-side (Rhino) syntax
+   * validation for the given properties, or `null` when it carries none. Mirrors
+   * filter-transformer's `getElementScript`.
+   */
+  getScript?: (propertiesXml: string | null) => string | null;
   securesTransport?: (propertiesXml: string | null) => boolean;
+  /**
+   * The `<pluginProperties>` child element this section owns (its FQN tag),
+   * when the section binds to exactly one such element. The registry drops a
+   * later registrant claiming an already-claimed element (first-wins) — two
+   * sections writing the same element would silently corrupt each other.
+   * Set by the runtime plugin loader; compiled-in sections manage
+   * their own elements and may omit it.
+   */
+  ownedElementClass?: string;
 }

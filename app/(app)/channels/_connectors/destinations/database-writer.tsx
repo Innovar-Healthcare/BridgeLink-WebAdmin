@@ -48,7 +48,6 @@ const DEFAULT_XML = DEFAULT_DEST_PROPERTIES_XML["Database Writer"]!;
 function DatabaseWriterBottomSection({
   propertiesXml,
   onChange,
-  isDark,
   channelId = "",
   channelName = "",
   transportName,
@@ -202,16 +201,10 @@ function DatabaseWriterBottomSection({
     commit({ ...local, query: composeWriterInsertText(sql, local.query, local.useScript) });
   }
 
-  // Monaco language/theme switch mirrors the Database Reader: the JS (rhino)
-  // theme only applies in script mode; SQL mode uses Monaco's stock SQL theme.
+  // Monaco language switch mirrors the Database Reader. There is no matching
+  // theme switch: the app has one global theme carrying every language's token
+  // rules, so SQL and Rhino both color correctly under it.
   const editorLanguage = local.useScript ? RHINO_LANG_ID : "sql";
-  const editorTheme = local.useScript
-    ? isDark
-      ? "mirth-js-dark"
-      : "mirth-js"
-    : isDark
-      ? "vs-dark"
-      : "vs";
 
   return (
     <>
@@ -410,7 +403,6 @@ function DatabaseWriterBottomSection({
                 registerRhinoLanguage(m);
               }}
               onMount={handleMount}
-              theme={editorTheme}
               height="100%"
               width="100%"
               options={getRhinoEditorOptions({

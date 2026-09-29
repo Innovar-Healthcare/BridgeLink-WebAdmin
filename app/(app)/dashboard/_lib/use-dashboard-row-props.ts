@@ -36,6 +36,7 @@ export function useDashboardRowProps(inputs: Inputs): SharedRowProps {
     onGroupAction,
     onViewMessages,
     onSendMessage,
+    onViewThreads,
     onClearStats,
     onRemoveAllMessages,
     onGroupClearStats,
@@ -44,6 +45,7 @@ export function useDashboardRowProps(inputs: Inputs): SharedRowProps {
     onStartConnector,
     globalDensity,
     setShowQueueDisabledWarning,
+    selectionHasHaltableNonSyncing,
   } = inputs;
 
   const onStopConnectorQueueDisabled = useCallback(
@@ -71,6 +73,7 @@ export function useDashboardRowProps(inputs: Inputs): SharedRowProps {
       onGroupAction,
       onViewMessages,
       onSendMessage,
+      onViewThreads,
       onClearStats,
       onRemoveAllMessages,
       onGroupClearStats,
@@ -79,6 +82,7 @@ export function useDashboardRowProps(inputs: Inputs): SharedRowProps {
       onStopConnectorQueueDisabled,
       onStartConnector,
       globalDensity,
+      selectionHasHaltableNonSyncing,
     }),
     [
       expanded,
@@ -99,6 +103,7 @@ export function useDashboardRowProps(inputs: Inputs): SharedRowProps {
       onGroupAction,
       onViewMessages,
       onSendMessage,
+      onViewThreads,
       onClearStats,
       onRemoveAllMessages,
       onGroupClearStats,
@@ -107,6 +112,7 @@ export function useDashboardRowProps(inputs: Inputs): SharedRowProps {
       onStopConnectorQueueDisabled,
       onStartConnector,
       globalDensity,
+      selectionHasHaltableNonSyncing,
     ]
   );
 }

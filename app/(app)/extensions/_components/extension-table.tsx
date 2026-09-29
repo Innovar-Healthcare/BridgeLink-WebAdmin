@@ -12,9 +12,24 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { EXT_COLS, type ExtCol, type ExtensionRow } from "../_lib/extension-types";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  EXT_COLS,
+  type ExtCol,
+  type ExtensionKind,
+  type ExtensionRow,
+} from "../_lib/extension-types";
 
 // ─── Extension Table ──────────────────────────────────────────────────────────
+
+/**
+ * Key for the pending-removal set, D-05). Keyed by kind + name so a
+ * connector and a plugin sharing a name are never conflated.
+ */
+export function pendingRemovalKey(kind: ExtensionKind, name: string): string {
+  return `${kind}:${name}`;
+}
 
 interface ExtensionTableProps {
   title: string;
@@ -29,6 +44,12 @@ interface ExtensionTableProps {
   /** When true, disable the manage context-menu items (Enable/Disable/Uninstall). */
   viewOnly?: boolean;
   loading: boolean;
+  /**
+   * Keys (see `pendingRemovalKey`) of rows that were just uninstalled but not yet
+   * removed from the server list — surfaced as a "Pending Removal" badge (D-05).
+   * Cleared by the caller's `load()`.
+   */
+  pendingRemoval?: Set<string>;
 }
 
 export function ExtensionTable({
@@ -43,6 +64,7 @@ export function ExtensionTable({
   onContextUninstall,
   viewOnly = false,
   loading,
+  pendingRemoval,
 }: ExtensionTableProps) {
   const colConfig = useColumnConfig(EXT_COLS, storageKey);
   const { orderedCols, colState, setVisible, moveCol, resetToDefaults } = colConfig;
@@ -105,7 +127,9 @@ export function ExtensionTable({
         empty="No extensions installed."
         containerClassName="flex-1 min-h-0"
         renderCell={(row, col) => {
-          if (col === "status")
+          if (col === "status") {
+            const isPendingRemoval =
+              pendingRemoval?.has(pendingRemovalKey(row.kind, row.name)) ?? false;
             return (
               <span className="flex items-center gap-1.5">
                 <span
@@ -118,8 +142,24 @@ export function ExtensionTable({
                 >
                   {row.enabled ? "Enabled" : "Disabled"}
                 </span>
+                {isPendingRemoval && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Badge
+                        variant="outline"
+                        className="border-yellow-300 dark:border-yellow-700 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300"
+                      >
+                        Pending Removal
+                      </Badge>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Uninstall queued — restart the server to finalize removal.
+                    </TooltipContent>
+                  </Tooltip>
+                )}
               </span>
             );
+          }
           if (col === "name") return row.name;
           if (col === "author") return row.author;
           if (col === "url")

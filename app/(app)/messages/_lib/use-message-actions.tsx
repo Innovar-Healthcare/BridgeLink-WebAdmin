@@ -54,6 +54,10 @@ export interface MessageActionsDeps {
   reprocessMode: "single" | "bulk" | null;
   visibleCols: ColDef<MsgCol>[];
   activeFilterRef: React.RefObject<MessageFilter | null>;
+  /** The channel `activeFilterRef` was pinned against. Every filter-scoped action must check it
+   *  equals selectedChannelId: the pin survives a channel switch, so without the check Remove
+   *  Results would delete from the newly selected channel using the previous channel's filter. */
+  activeChannelRef: React.RefObject<string>;
   /** True once the user has run an explicit search — gates export (see handleExportCsv). */
   userHasSearchedRef: React.RefObject<boolean>;
   search: (pageNum?: number) => void;
@@ -87,6 +91,7 @@ export function useMessageActions(deps: MessageActionsDeps) {
     reprocessMode,
     visibleCols,
     activeFilterRef,
+    activeChannelRef,
     userHasSearchedRef,
     search,
     setActionLoading,
@@ -248,8 +253,12 @@ export function useMessageActions(deps: MessageActionsDeps) {
   }
 
   async function doRemoveResults() {
-    if (!selectedChannelId || !activeFilterRef.current) return;
+    // Close first: a refusal below must not leave the dialog open with a dead Remove button.
     setRemoveResultsConfirmOpen(false);
+    if (!selectedChannelId || !activeFilterRef.current) return;
+    // The pinned filter belongs to whatever channel was searched. Refuse rather than delete from
+    // the current channel using the previous one's criteria.
+    if (activeChannelRef.current !== selectedChannelId) return;
     setActionLoading(true);
     setActionError("");
     try {
@@ -279,12 +288,19 @@ export function useMessageActions(deps: MessageActionsDeps) {
     // Refuse until the user runs an explicit search: the channel-open auto-load pins a (default)
     // filter, so activeFilterRef being non-null is not a valid "a search has run" signal. Mirrors
     // Java MessageExportDialog.java:185-186 (refuses while isChannelMessagesPanelFirstLoadSearch).
-    if (!selectedChannelId || !activeFilterRef.current || !userHasSearchedRef.current) {
+    // The activeChannelRef check also covers a channel switch mid-session: the pinned filter is
+    // still the previous channel's, so there is nothing searched to export for this one.
+    if (
+      !selectedChannelId ||
+      !activeFilterRef.current ||
+      !userHasSearchedRef.current ||
+      activeChannelRef.current !== selectedChannelId
+    ) {
       toast.info("There are no messages to export. Please perform a search before exporting.");
       return;
     }
     void exportMessagesCsv(visibleCols, selectedChannelId, activeFilterRef.current);
-  }, [selectedChannelId, visibleCols, activeFilterRef, userHasSearchedRef]);
+  }, [selectedChannelId, visibleCols, activeFilterRef, activeChannelRef, userHasSearchedRef]);
 
   async function doReprocess(options: ReprocessOptions) {
     if (!selectedChannelId) return;
@@ -300,7 +316,13 @@ export function useMessageActions(deps: MessageActionsDeps) {
           options.replace,
           options.reprocessMetaDataIds
         );
-      } else if (mode === "bulk" && activeFilterRef.current) {
+      } else if (
+        mode === "bulk" &&
+        activeFilterRef.current &&
+        // Same guard as doRemoveResults: never bulk-reprocess this channel through the filter
+        // pinned while a different one was selected.
+        activeChannelRef.current === selectedChannelId
+      ) {
         await reprocessMessagesWithFilter(
           selectedChannelId,
           activeFilterRef.current,

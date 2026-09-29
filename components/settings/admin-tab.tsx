@@ -68,13 +68,21 @@ const INDENT_OPTIONS = [
 // Curated monospace font stacks for the code editors. The value is the
 // full CSS font-family string handed to Monaco; each stack ends in a generic
 // fallback so the editor stays monospaced even if the preferred face is absent.
+//
+// JetBrains Mono and Fira Code are self-hosted (app/globals.css, vendored by
+// scripts/copy-fonts.mjs), so these options render as distinct faces rather than
+// all collapsing to Menlo the way they did before. Keep the stacks in
+// lockstep with the @font-face family names.
+//
+// A "Cascadia Code" option was removed in shipping a webfont subset
+// under that name conflicts with its OFL Reserved Font Name. A persisted value
+// pointing at it is migrated back to the default by loadAdminPrefs().
 const EDITOR_FONT_OPTIONS = [
   {
     value: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace",
     label: "JetBrains Mono (default)",
   },
   { value: "'Fira Code', Menlo, Consolas, monospace", label: "Fira Code" },
-  { value: "'Cascadia Code', Menlo, Consolas, monospace", label: "Cascadia Code" },
   { value: "Menlo, Consolas, 'Courier New', monospace", label: "System (Menlo / Consolas)" },
 ];
 
@@ -177,9 +185,11 @@ export function AdminTab({ onDirty, saveRef, actionsRef, onActionsChanged }: Adm
         if (user) {
           setCurrentUser(user);
 
-          // Load server-side prefs
+          // Load server-side prefs. Unset ("") defaults to on, matching Java;
+          // an unreadable preference (null) keeps that same default rather than
+          // silently presenting the checkbox as off.
           const notif = await getUserPreference(user.id, "checkForNotifications");
-          const notifVal = notif === "" || notif === "true";
+          const notifVal = notif === null || notif === "" || notif === "true";
           setCheckForNotifications(notifVal);
 
           setOrigServerPrefs(JSON.stringify({ checkForNotifications: notifVal }));
@@ -228,19 +238,32 @@ export function AdminTab({ onDirty, saveRef, actionsRef, onActionsChanged }: Adm
     // Save local prefs
     saveAllAdminPrefs(prefs);
     setOriginalPrefs(JSON.stringify(prefs));
-    // Save server-side prefs
+    // Save server-side prefs. setUserPreference reports a failed write by returning
+    // false rather than throwing, so an unchecked call would leave the tab claiming a
+    // successful save while the server kept the old value. Hold the
+    // failure rather than throwing here, so the local prefs saved above still reach
+    // their consumers below.
+    let serverPrefError = "";
     if (currentUser) {
-      await setUserPreference(
+      const saved = await setUserPreference(
         currentUser.id,
         "checkForNotifications",
         String(checkForNotifications)
       );
-      setOrigServerPrefs(serverPrefsStr);
+      if (saved) {
+        setOrigServerPrefs(serverPrefsStr);
+      } else {
+        serverPrefError =
+          'The server rejected the change to "Check for new notifications on login". ' +
+          "Your other settings were saved.";
+      }
     }
     // Notify consumers (theme color, placement, zebra rows, etc.) that
     // preferences changed so they re-read without a reload. Fired even when
     // there is no current user, since the local prefs above always persist.
     dispatchSettingsSaved();
+
+    if (serverPrefError) throw new Error(serverPrefError);
   }
 
   const handleSave = async () => {

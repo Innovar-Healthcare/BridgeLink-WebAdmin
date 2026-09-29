@@ -34,16 +34,10 @@ import {
 import type { ColStateMap } from "@/lib/hooks/use-column-config";
 import { GroupTagFilterBar } from "@/components/group-tag-filter-bar";
 import { EmptyState } from "@/components/empty-state";
-import { SendMessageDialog } from "@/components/messages/send-message-dialog";
 import { LayoutList } from "lucide-react";
-import {
-  ClearStatisticsDialog,
-  RemoveAllMessagesDialog,
-  QueueDisabledWarningDialog,
-} from "./_components/dashboard-dialogs";
 import { DashboardStatsPanel } from "./_components/dashboard-stats-panel";
 import { DashboardActionPanel } from "./_components/dashboard-action-panel";
-import { DependencyWarningDialog } from "./_components/dependency-warning-dialog";
+import { DashboardDialogHost } from "./_components/dashboard-dialog-host";
 import { DashboardPageHeader } from "./_components/dashboard-page-header";
 import { DockableToolbar } from "@/components/dockable-toolbar";
 import { useToolbarPosition } from "@/lib/hooks/use-toolbar-position";
@@ -174,25 +168,18 @@ export default function DashboardPage() {
     setTagMode,
     tagOptions,
     groupOptions,
+    groupNames,
     filteredStatuses,
   } = useDashboardFilters(statuses, channelTags, allGroups, tagMap);
 
+  const dashboardActions = useDashboardActions(statuses, load);
   const {
     selectedChannelId,
     selectedConnectorId,
     onSelectChannel,
-    sendDialogTarget,
-    setSendDialogTarget,
-    showQueueDisabledWarning,
     setShowQueueDisabledWarning,
-    clearStatsTarget,
-    setClearStatsTarget,
-    removeAllTarget,
-    setRemoveAllTarget,
-    depPrompt,
     handleViewMessages,
     handleOpenSendMessage,
-    handleDashboardSendMessage,
     handleClearStats,
     handleRemoveAllMessages,
     handleStopConnector,
@@ -202,7 +189,8 @@ export default function DashboardPage() {
     handleGroupClearStats,
     handleGroupClearStatsForSelection,
     handleGroupRemoveAllMessagesForSelection,
-  } = useDashboardActions(statuses, load);
+    handleViewThreads,
+  } = dashboardActions;
 
   // ── Multi-select state ─────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -733,40 +721,6 @@ export default function DashboardPage() {
     setLastClickedId(null);
   }, []);
 
-  // ── Shared row props ────────────────────────────────────────────────────
-  // Memoized (extracted hook) so DashboardRow (React.memo) skips re-rendering on
-  // idle ticks — the page still re-renders twice per poll (the `refreshing` flag),
-  // but with stable props the rows reconcile zero work.
-  const sharedRowProps = useDashboardRowProps({
-    expanded,
-    onToggle: toggleExpand,
-    tagMap,
-    tagDisplayMode,
-    visibleCols,
-    mounted,
-    selectedIds,
-    selectedConnector,
-    onRowClick: handleRowClick,
-    statsMode,
-    portMap,
-    connectorStates,
-    trendSummary,
-    trendLoading,
-    onChannelAction: handleChannelAction,
-    onGroupAction: handleGroupAction,
-    onViewMessages: handleViewMessages,
-    onSendMessage: handleOpenSendMessage,
-    onClearStats: handleClearStats,
-    onRemoveAllMessages: handleRemoveAllMessages,
-    onGroupClearStats: handleGroupClearStatsForSelection,
-    onGroupRemoveAllMessages: handleGroupRemoveAllMessagesForSelection,
-    onStopConnector: handleStopConnector,
-    // (selection-aware context-menu handlers come from useDashboardActions)
-    onStartConnector: handleStartConnector,
-    globalDensity,
-    setShowQueueDisabledWarning,
-  });
-
   // ── Batch-action derived state (for toolbar) ─────────────────────────
   // States during which the channel is mid-transition between deployed and undeployed.
   // Java: `DashboardPanel.updatePopupMenu` (lines 524-526) hides every task except Refresh
@@ -801,6 +755,52 @@ export default function DashboardPage() {
       ),
     [statuses, effectiveSelectedIds]
   );
+  // Undeploy is disabled for the ENTIRE selection — not just the offending channel — when
+  // any selected channel is in a haltable non-SYNCING state. Java computes this once globally
+  // (`containsHaltableNonSyncingState`, DashboardPanel.java:464-478) and, for a multi-channel
+  // selection, hides the Undeploy task outright rather than filtering it down to the eligible
+  // subset (DashboardPanel.java:530-535). `Frame.doUndeployChannel:3248-3274` confirms that
+  // once enabled, the action is sent for the whole selection, never a filtered subset..
+  const selectionHasHaltableNonSyncing = selectedStatuses.some(
+    (s) => HALTABLE_STATES.includes(s.state ?? "") && s.state !== "SYNCING"
+  );
+
+  // ── Shared row props ────────────────────────────────────────────────────
+  // Memoized (extracted hook) so DashboardRow (React.memo) skips re-rendering on
+  // idle ticks — the page still re-renders twice per poll (the `refreshing` flag),
+  // but with stable props the rows reconcile zero work.
+  const sharedRowProps = useDashboardRowProps({
+    expanded,
+    onToggle: toggleExpand,
+    tagMap,
+    tagDisplayMode,
+    visibleCols,
+    mounted,
+    selectedIds,
+    selectedConnector,
+    onRowClick: handleRowClick,
+    statsMode,
+    portMap,
+    connectorStates,
+    trendSummary,
+    trendLoading,
+    onChannelAction: handleChannelAction,
+    onGroupAction: handleGroupAction,
+    onViewMessages: handleViewMessages,
+    onSendMessage: handleOpenSendMessage,
+    onViewThreads: handleViewThreads,
+    onClearStats: handleClearStats,
+    onRemoveAllMessages: handleRemoveAllMessages,
+    onGroupClearStats: handleGroupClearStatsForSelection,
+    onGroupRemoveAllMessages: handleGroupRemoveAllMessagesForSelection,
+    onStopConnector: handleStopConnector,
+    // (selection-aware context-menu handlers come from useDashboardActions)
+    onStartConnector: handleStartConnector,
+    globalDensity,
+    setShowQueueDisabledWarning,
+    selectionHasHaltableNonSyncing,
+  });
+
   const startableIds = selectedStatuses
     .filter((s) => s.state === "STOPPED" || s.state === "PAUSED")
     .map((s) => s.channelId);
@@ -818,10 +818,11 @@ export default function DashboardPage() {
   const removableIds = selectedStatuses
     .filter((s) => !HALTABLE_STATES.includes(s.state ?? ""))
     .map((s) => s.channelId);
-  // Undeploy is hidden when the channel is in a haltable non-SYNCING state.
-  const undeployableIds = selectedStatuses
-    .filter((s) => !HALTABLE_STATES.includes(s.state ?? "") || s.state === "SYNCING")
-    .map((s) => s.channelId);
+  // Undeploy targets the whole selection once eligible, or none of it — see
+  // `selectionHasHaltableNonSyncing` above.
+  const undeployableIds = selectionHasHaltableNonSyncing
+    ? []
+    : selectedStatuses.map((s) => s.channelId);
   // Clear Stats / View Messages / Send Message are hidden during mid-deploy lockout.
   const interactableIds = selectedStatuses
     .filter((s) => !MID_DEPLOY_STATES.includes(s.state ?? ""))
@@ -900,6 +901,7 @@ export default function DashboardPage() {
             groupOptions={groupOptions}
             selectedGroupIds={selectedGroupIds}
             onGroupChange={setSelectedGroupIds}
+            groupNames={groupNames}
             tagOptions={tagOptions}
             selectedTagNames={selectedTagNames}
             onTagChange={setSelectedTagNames}
@@ -1091,50 +1093,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Dialogs */}
-      {sendDialogTarget && (
-        <SendMessageDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setSendDialogTarget(null);
-          }}
-          channelName={sendDialogTarget.channelName}
-          connectors={sendDialogTarget.connectors}
-          onSend={handleDashboardSendMessage}
-        />
-      )}
-      {showQueueDisabledWarning && (
-        <QueueDisabledWarningDialog onClose={() => setShowQueueDisabledWarning(false)} />
-      )}
-      {clearStatsTarget && (
-        <ClearStatisticsDialog
-          channelId={clearStatsTarget.channelId}
-          channelIds={clearStatsTarget.channelIds}
-          channelName={clearStatsTarget.channelName}
-          metaDataId={clearStatsTarget.metaDataId}
-          onClose={() => setClearStatsTarget(null)}
-          onDone={() => {
-            setClearStatsTarget(null);
-            load();
-          }}
-        />
-      )}
-      {removeAllTarget && (
-        <RemoveAllMessagesDialog
-          channels={removeAllTarget.channels}
-          onClose={() => setRemoveAllTarget(null)}
-          onDone={() => {
-            setRemoveAllTarget(null);
-            load();
-          }}
-        />
-      )}
-      {depPrompt && (
-        <DependencyWarningDialog
-          task={depPrompt.task}
-          additionalChannels={depPrompt.additionalChannels}
-          onResolve={depPrompt.onResolve}
-        />
-      )}
+      <DashboardDialogHost actions={dashboardActions} load={load} />
     </div>
   );
 }

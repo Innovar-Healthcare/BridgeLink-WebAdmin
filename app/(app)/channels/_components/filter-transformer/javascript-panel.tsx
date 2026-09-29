@@ -17,11 +17,12 @@ import { type EditorContext } from "@/lib/plugin-registry";
 import { pluginSlots } from "@/lib/plugin-slots";
 import { mountPluginMonacoActions } from "@/lib/monaco-plugin-actions";
 import { usePluginSurfaceEnabled, useSlotEnabled } from "@/lib/plugin-gating";
+import { clampLine, revealPosition } from "@/lib/monaco-reveal";
+import { usePendingReveal } from "./pending-reveal-context";
 
 interface Props {
   element: JavaScriptRule | JavaScriptStep;
   onChange: (element: JavaScriptRule | JavaScriptStep) => void;
-  isDark: boolean;
   showErrors?: boolean;
   contextType?: ContextType;
   channelId?: string;
@@ -32,7 +33,6 @@ interface Props {
 export function JavaScriptPanel({
   element,
   onChange,
-  isDark,
   showErrors,
   contextType,
   channelId,
@@ -42,6 +42,7 @@ export function JavaScriptPanel({
   const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
   const surfaceEnabled = usePluginSurfaceEnabled();
   const overlayEnabled = useSlotEnabled("editor.overlay");
+  const pendingReveal = usePendingReveal();
 
   // Re-run the plugin-action mount whenever the enablement snapshot changes —
   // an editor mounted while the installed-plugins cache was still loading would
@@ -79,6 +80,41 @@ export function JavaScriptPanel({
     // Mount plugin-contributed Monaco actions, filtered by server-enablement
     // gating and guarded against double-registration.
     mountPluginMonacoActions(editor, monaco, surfaceEnabled);
+
+    // Config Search deep link: jump to the line the match was found on
+    //. This has to run here rather than in an effect — the editor is
+    // uncontrolled and Monaco loads asynchronously, so onMount can fire well
+    // after React's mount effect, and there is no editor handle reachable from
+    // outside it.
+    //
+    // Nothing needs an `editorGen` counter the way content-viewer.tsx does: the
+    // detail pane is remounted per selection, so the decoration, its timer and
+    // its listener are all created and torn down within one editor's lifetime.
+    const reveal = pendingReveal.take();
+    if (reveal) {
+      const line = clampLine(editor, reveal.line);
+      revealPosition(editor, { lineNumber: line, column: 1 });
+      const highlight = editor.createDecorationsCollection([
+        {
+          range: new monaco.Range(line, 1, line, 1),
+          options: { isWholeLine: true, className: "bl-search-hit-line" },
+        },
+      ]);
+      // The CSS fades it; this is what actually removes it, so a reduced-motion
+      // user (no animation) does not keep a highlighted line forever.
+      const timer = setTimeout(() => highlight.clear(), 2600);
+      // Clear early on the first real edit. Deliberately not on cursor movement:
+      // revealPosition above moves the cursor, which would clear it instantly.
+      const onEdit = editor.onDidChangeModelContent(() => {
+        clearTimeout(timer);
+        highlight.clear();
+        onEdit.dispose();
+      });
+      editor.onDidDispose(() => {
+        clearTimeout(timer);
+        onEdit.dispose();
+      });
+    }
 
     const domNode = editor.getDomNode();
     if (!domNode) return;
@@ -153,7 +189,6 @@ export function JavaScriptPanel({
         <MonacoEditor
           height="100%"
           language={RHINO_LANG_ID}
-          theme={isDark ? "mirth-js-dark" : "mirth-js"}
           defaultValue={element.script ?? ""}
           beforeMount={handleBeforeMount}
           onMount={handleMount}

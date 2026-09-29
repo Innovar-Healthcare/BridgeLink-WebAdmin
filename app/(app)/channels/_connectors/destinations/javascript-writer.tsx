@@ -33,7 +33,6 @@ const DEFAULT_XML = DEFAULT_DEST_PROPERTIES_XML["JavaScript Writer"]!;
 function JavaScriptWriterBottomSection({
   propertiesXml,
   onChange,
-  isDark,
   invalidFields,
   channelId = "",
   channelName,
@@ -101,7 +100,6 @@ function JavaScriptWriterBottomSection({
           onChange={handleScriptChange}
           beforeMount={(m) => registerRhinoLanguage(m)}
           onMount={handleMount}
-          theme={isDark ? "mirth-js-dark" : "mirth-js"}
           height="100%"
           width="100%"
           options={getRhinoEditorOptions({

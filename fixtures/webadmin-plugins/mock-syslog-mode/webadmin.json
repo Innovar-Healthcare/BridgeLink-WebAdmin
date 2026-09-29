@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schemas.bridgelink.online/webadmin-plugin/v2.json",
+  "manifestVersion": 2,
+  "transmissionModes": [
+    {
+      "name": "MockSyslog",
+      "displayName": "Mock Syslog",
+      "propertiesClass": "com.innovarhealthcare.connect.plugins.mocksyslogmode.MockSyslogModeProperties",
+      "defaultStartBytes": "",
+      "defaultEndBytes": "0A",
+      "fields": [
+        {
+          "key": "framingMethod",
+          "type": "select",
+          "label": "Framing Method",
+          "tooltip": "Non-Transparent framing terminates each message with the trailer byte; Octet Counting prefixes each message with its length (RFC 6587).",
+          "defaultValue": "nonTransparent",
+          "options": [
+            { "value": "nonTransparent", "label": "Non-Transparent (trailer byte)" },
+            { "value": "octetCounting", "label": "Octet Counting" }
+          ]
+        },
+        {
+          "key": "maxMessageLength",
+          "type": "number",
+          "label": "Max Message Length",
+          "tooltip": "Maximum message size in octets accepted by the receiver.",
+          "defaultValue": "2048",
+          "visibleWhen": { "field": "framingMethod", "op": "eq", "value": "octetCounting" },
+          "validation": [
+            {
+              "rule": "min",
+              "value": 480,
+              "message": "Syslog messages must allow at least 480 octets."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

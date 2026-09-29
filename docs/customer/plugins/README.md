@@ -10,7 +10,8 @@ sign-on, access control, and more.
 Read in this order:
 
 1. **[OVERVIEW.md](./OVERVIEW.md)** — what plugins are, who this is for, and the
-   one constraint that shapes everything (build-time, no runtime install).
+   two ways to build one: declarative (installed at runtime, no client code) or
+   compiled-in (built into the application).
 2. **[QUICKSTART.md](./QUICKSTART.md)** — copy the reference template and see a
    plugin load in about ten minutes.
 3. **[ARCHITECTURE.md](./ARCHITECTURE.md)** — the extension-point catalog and how
@@ -25,6 +26,11 @@ Read in this order:
    expectations.
 8. **[CHECKLIST.md](./CHECKLIST.md)** — the pre-flight gate that pulls all of
    the above together.
+
+Building a declarative plugin? Read
+**[DECLARATIVE-PLUGINS.md](./DECLARATIVE-PLUGINS.md)** (packaging, validation,
+preview, licensing) and **[DECLARATIVE-REFERENCE.md](./DECLARATIVE-REFERENCE.md)**
+(the full `webadmin.json` grammar). Steps 2–8 above are for compiled-in plugins.
 
 The ready-to-copy scaffold lives in **[template/](./template/)** (the Web
 Administrator half of a plugin).

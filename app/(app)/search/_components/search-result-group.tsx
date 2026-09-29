@@ -12,11 +12,9 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type {
-  NavigationTarget,
-  SearchSourceCategory,
-  SourceResult,
-} from "@/lib/search/search-types";
+import { buildSearchResultHref, targetSupportsLine } from "@/lib/search/search-nav";
+import { searchResultKey } from "@/lib/search/search-session";
+import type { SearchSourceCategory, SourceResult } from "@/lib/search/search-types";
 import { SearchResultItem } from "./search-result-item";
 
 const CATEGORY_CONFIG: Record<
@@ -41,7 +39,17 @@ const CATEGORY_CONFIG: Record<
   },
 };
 
-interface SearchResultGroupProps {
+/** Bookkeeping shared by every result row, so returning to /search is useful. */
+interface ResultTrackingProps {
+  /** Result keys already opened this session — rendered dimmed. */
+  visited: Set<string>;
+  /** The row to flash once on return from a match. */
+  flashKey: string | null;
+  /** Called just before navigating, to record what was opened. */
+  onOpened: (key: string) => void;
+}
+
+interface SearchResultGroupProps extends ResultTrackingProps {
   category: SearchSourceCategory;
   sources: SourceResult[];
   query: string;
@@ -52,7 +60,14 @@ interface SearchResultGroupProps {
  * Shows the category header with total match count, then each source
  * with its segment-level matches.
  */
-export function SearchResultGroup({ category, sources, query }: SearchResultGroupProps) {
+export function SearchResultGroup({
+  category,
+  sources,
+  query,
+  visited,
+  flashKey,
+  onOpened,
+}: SearchResultGroupProps) {
   const [expanded, setExpanded] = useState(true);
   const config = CATEGORY_CONFIG[category];
   const Icon = config.icon;
@@ -84,7 +99,14 @@ export function SearchResultGroup({ category, sources, query }: SearchResultGrou
       {expanded && (
         <div className="ml-2 mt-1 space-y-2">
           {sources.map((source) => (
-            <SourceResultCard key={source.id} source={source} query={query} />
+            <SourceResultCard
+              key={source.id}
+              source={source}
+              query={query}
+              visited={visited}
+              flashKey={flashKey}
+              onOpened={onOpened}
+            />
           ))}
         </div>
       )}
@@ -92,39 +114,26 @@ export function SearchResultGroup({ category, sources, query }: SearchResultGrou
   );
 }
 
-function SourceResultCard({ source, query }: { source: SourceResult; query: string }) {
+function SourceResultCard({
+  source,
+  query,
+  visited,
+  flashKey,
+  onOpened,
+}: { source: SourceResult; query: string } & ResultTrackingProps) {
   const [expanded, setExpanded] = useState(true);
   const router = useRouter();
 
-  function handleNavigate(target: NavigationTarget): void {
-    switch (target.type) {
-      case "channel-summary":
-        router.push(`/channels/${target.channelId}/edit`);
-        break;
-      case "channel-scripts":
-        router.push(`/channels/${target.channelId}/edit?tab=scripts&script=${target.script}`);
-        break;
-      case "channel-source":
-        router.push(`/channels/${target.channelId}/edit?tab=source&sub=${target.sub}`);
-        break;
-      case "channel-destination":
-        router.push(
-          `/channels/${target.channelId}/edit?tab=destination&dest=${target.destIndex}&sub=${target.sub}`
-        );
-        break;
-      case "channel-attachment":
-        router.push(`/channels/${target.channelId}/edit?tab=summary`);
-        break;
-      case "code-template":
-        router.push(`/code-templates?templateId=${target.templateId}`);
-        break;
-      case "global-script":
-        router.push(`/global-scripts?tab=${target.scriptKey}`);
-        break;
-      case "config-map":
-        router.push(`/settings?tab=configuration-map`);
-        break;
-    }
+  /**
+   * `line` is omitted when opening the segment as a whole (the ExternalLink) and
+   * supplied when opening one matched line. `buildSearchResultHref` decides
+   * whether the destination can actually use it.
+   */
+  function openSegment(segmentIndex: number, line?: number): void {
+    const segment = source.segments[segmentIndex]?.segment;
+    if (!segment) return;
+    onOpened(searchResultKey(source.category, source.id, segmentIndex, line));
+    router.push(buildSearchResultHref(segment.navigateTo, line));
   }
 
   return (
@@ -151,15 +160,24 @@ function SourceResultCard({ source, query }: { source: SourceResult; query: stri
       {expanded && (
         <div className="px-3 pb-2 space-y-2">
           {source.segments.map((segResult, i) => (
-            <div key={i}>
-              <div className="flex items-center gap-1">
+            // The segment-level key is the one recorded when the whole segment is
+            // opened via the icon below, so it needs a node to scroll back to on
+            // return just as much as the individual line rows do.
+            <div key={i} data-result-key={searchResultKey(source.category, source.id, i)}>
+              <div className="flex items-start gap-1">
                 <SearchResultItem
                   segment={segResult.segment}
                   matches={segResult.matches}
                   query={query}
+                  linkable={segResult.segment.lineBasis === "editor"}
+                  lineNavigable={targetSupportsLine(segResult.segment.navigateTo)}
+                  onOpenLine={(line) => openSegment(i, line)}
+                  lineKey={(line) => searchResultKey(source.category, source.id, i, line)}
+                  visited={visited}
+                  flashKey={flashKey}
                 />
                 <button
-                  onClick={() => handleNavigate(segResult.segment.navigateTo)}
+                  onClick={() => openSegment(i)}
                   className="ml-auto shrink-0 p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
                   title="Open in editor"
                 >

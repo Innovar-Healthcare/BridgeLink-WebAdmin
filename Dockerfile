@@ -9,6 +9,22 @@ COPY . .
 ARG BETA_MODE=""
 RUN BETA_MODE="$BETA_MODE" npm run build
 
+# Source-leak guard: the standalone must contain only COMPILED output.
+# Next's file tracer over-includes the whole project root when a route performs a
+# filesystem read with a non-literal path, which shipped raw .ts/.tsx — including
+# the commercial plugins/ overlay — inside the public image. Fail the image build
+# here so a leaking image can never be pushed (the public release workflow builds
+# from this Dockerfile, not the tarball path guarded by scripts/smoke-standalone.sh).
+# Backed by outputFileTracingExcludes in next.config.ts.
+RUN set -eu; \
+  for leak in app lib components hooks plugins e2e __tests__ scripts; do \
+    if [ -e ".next/standalone/$leak" ]; then \
+      echo "ERROR: .next/standalone contains raw source '$leak/' (source-leak regression,."; \
+      exit 1; \
+    fi; \
+  done; \
+  echo "source-leak guard: standalone is clean"
+
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
 WORKDIR /app

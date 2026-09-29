@@ -147,5 +147,12 @@ export function SchemaField({
           />
         </FieldRow>
       );
+
+    case "javascript":
+      // Rendered by the data-type section's own ScriptField (the Monaco
+      // script dialog needs isDark/channelId, which this generic contract
+      // doesn't carry); the validator restricts the type to data type
+      // fields, so no other kind can reach this case.
+      return null;
   }
 }

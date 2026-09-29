@@ -13,6 +13,13 @@ interface GroupTagFilterBarProps {
   groupOptions: { value: string; label: string }[];
   selectedGroupIds: Set<string>;
   onGroupChange: (ids: Set<string>) => void;
+  /**
+   * Group id -> name for every known group, including ones absent from `groupOptions`.
+   * Group filters are keyed by id, so without this a still-existing group that dropped out
+   * of the options (the dashboard lists only groups with a deployed channel) would show up
+   * as a bare UUID once selected. Tags need no equivalent — they are keyed by name.
+   */
+  groupNames?: Map<string, string>;
   tagOptions: { value: string; label: string }[];
   selectedTagNames: Set<string>;
   onTagChange: (names: Set<string>) => void;
@@ -30,6 +37,7 @@ export function GroupTagFilterBar({
   groupOptions,
   selectedGroupIds,
   onGroupChange,
+  groupNames,
   tagOptions,
   selectedTagNames,
   onTagChange,
@@ -56,15 +64,20 @@ export function GroupTagFilterBar({
           className="pl-8 text-sm"
         />
       </div>
-      {groupOptions.length > 0 && (
+      {/* Keep a dropdown mounted whenever something is selected, even with no options left:
+          the options are derived from server data while the selection persists in
+          sessionStorage, so deleting the last tag/group would otherwise unmount the only
+          control that can clear the filter and strand the list empty. */}
+      {(groupOptions.length > 0 || selectedGroupIds.size > 0) && (
         <MultiSelectDropdown
           label="Groups"
           options={groupOptions}
           selected={selectedGroupIds}
           onChange={onGroupChange}
+          orphanLabels={groupNames}
         />
       )}
-      {tagOptions.length > 0 && (
+      {(tagOptions.length > 0 || selectedTagNames.size > 0) && (
         <MultiSelectDropdown
           label="Tags"
           options={tagOptions}
@@ -72,7 +85,7 @@ export function GroupTagFilterBar({
           onChange={onTagChange}
         />
       )}
-      {tagOptions.length > 0 && selectedTagNames.size >= 2 && onTagModeChange && (
+      {selectedTagNames.size >= 2 && onTagModeChange && (
         <HoverTooltip
           content={
             tagMode === "or"

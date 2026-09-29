@@ -8,6 +8,8 @@
  * `${ATTACH:id}` tokens and the attachment list is appended to the serialized message.
  */
 
+import { ensureZip64Eocd } from "@/lib/zip64";
+
 /**
  * Extract the inner content of an XStream `<list>…</list>` wrapper.
  *
@@ -52,6 +54,11 @@ export function embedAttachmentsXml(messageXml: string, attachmentsListXml: stri
  * UI. fflate has no eval-class module init, unlike jszip. Plain (unencrypted) zips only — fflate
  * cannot produce password/AES-encrypted archives, which is why the dialog disables Password-Protect
  * for local export.
+ *
+ * This export writes ONE ENTRY PER MESSAGE, so a bulk export runs past the 65,535 entries a classic
+ * ZIP end-of-central-directory record can count. fflate emits none of the ZIP64 records that case
+ * requires, so the archive would read back as `count % 65536` messages — silently, and reported as
+ * a complete success. `ensureZip64Eocd` adds them; it is a no-op below the threshold.
  */
 export async function buildMessagesZip(files: Record<string, string>): Promise<Uint8Array> {
   const { zip, strToU8 } = await import("fflate");
@@ -59,7 +66,8 @@ export async function buildMessagesZip(files: Record<string, string>): Promise<U
   for (const [name, content] of Object.entries(files)) {
     data[name] = strToU8(content);
   }
-  return new Promise<Uint8Array>((resolve, reject) => {
-    zip(data, (err, out) => (err ? reject(err) : resolve(out)));
+  const out = await new Promise<Uint8Array>((resolve, reject) => {
+    zip(data, (err, result) => (err ? reject(err) : resolve(result)));
   });
+  return ensureZip64Eocd(out).bytes;
 }

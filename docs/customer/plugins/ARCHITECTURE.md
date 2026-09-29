@@ -29,9 +29,9 @@ Three rules define the model:
 3. **Build-time, not runtime.** Plugins compile into the application bundle when
    it is built. There is **no runtime install** — a plugin must be present in
    the source tree at build time. See [OVERVIEW.md](./OVERVIEW.md) for what this
-   means for shipping your plugin. _(A declarative, no-client-code runtime model
-   that lifts this for manifest-based properties editors is on the roadmap — see
-   the roadmap note in [OVERVIEW.md](./OVERVIEW.md).)_
+   means for shipping your plugin. _(Declarative plugins do not have this
+   constraint: they install at runtime with no client code. See
+   [DECLARATIVE-PLUGINS.md](./DECLARATIVE-PLUGINS.md).)_
 
 When a plugin is absent, every extension point simply stays empty and the
 application runs normally. You never write stub files or edit a central

@@ -17,6 +17,9 @@ import {
   request,
   throwForStatus,
 } from "./api-core";
+// Only `registerCacheTeardown` is imported from `lib/logout` — documented there (and in
+// `cron-verdict-cache.ts`, as safe from any reachable path including server-side.
+import { registerCacheTeardown } from "@/lib/logout";
 
 /**
  * Generic helper: XStream collapses single-item arrays to plain objects throughout
@@ -178,6 +181,11 @@ export function invalidateCodeTemplateCache(): void {
   _codeTemplateLibraryCache = null;
   _codeTemplateLibraryResolved = null;
 }
+
+// Also cleared on login/logout/401. Code templates are permission-gated JavaScript source;
+// logout is a client-side router.replace, so without this the next user on a shared
+// workstation reads the previous user's templates before the first re-fetch.
+registerCacheTeardown(invalidateCodeTemplateCache);
 
 /**
  * Cached version of getCodeTemplateLibraries().

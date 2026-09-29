@@ -27,8 +27,8 @@ import {
   findDuplicateSignatures,
   type SignatureConflict,
 } from "@/lib/code-template-utils";
-import { CATEGORIES } from "@/lib/reference-data";
 import type { RefItem, RefCategory } from "@/lib/reference-data";
+import { useScriptReferenceCatalog } from "@/lib/script-references-catalog";
 import { pluginRegistry } from "@/lib/plugin-registry";
 import { useEnabledPluginNames } from "@/lib/installed-plugins";
 import { useLicensedPluginIds } from "@/lib/plugin-license";
@@ -238,16 +238,20 @@ export function ReferenceTab({
     return findDuplicateSignatures(templateMap, enabledLibs);
   }, [userTemplates, libraries, channelId]);
 
+  // Reference catalog — server-derived when the connected Core supports it, frozen client
+  // catalog otherwise.
+  const catalog = useScriptReferenceCatalog();
+
   // Categories excluded by context,:
   // - "postprocessor": `message` (ImmutableMessage) is not in scope in connectors
   // - "response": `responseStatus` etc. are only available in response transformers,
   //   so we include this category only when the editor is a response transformer.
   const filteredCategories = useMemo(
     () =>
-      CATEGORIES.filter(
+      catalog.filter(
         (cat) => cat.id !== "postprocessor" && (cat.id !== "response" || isResponseTransformer)
       ),
-    [isResponseTransformer]
+    [isResponseTransformer, catalog]
   );
 
   // Build a category for code snippets contributed by the active inbound data

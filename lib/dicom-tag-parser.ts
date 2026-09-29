@@ -130,9 +130,20 @@ export function isBase64DicomLike(text: string): boolean {
   }
 }
 
-/** Returns true when the text is BridgeLink DICOM XML (starts with <dicom). */
+/**
+ * Returns true when the text is BridgeLink DICOM XML (starts with <dicom>, after an
+ * optional leading `<?xml ...?>` declaration). The client's own base64->XML
+ * conversion never emits a declaration, but the server's `_toTree` response
+ * is a full XML document and does — this must recognize both, since
+ * `getTemplateString`'s "already converted, don't reconvert" check runs on
+ * whatever text is currently stored, regardless of which side produced it.
+ */
 export function isDicomXml(text: string): boolean {
-  return text.trimStart().startsWith("<dicom");
+  return text
+    .trimStart()
+    .replace(/^<\?xml[^?]*\?>/, "")
+    .trimStart()
+    .startsWith("<dicom");
 }
 
 // ─── XML helpers ──────────────────────────────────────────────────────────────

@@ -58,11 +58,8 @@ import { useExpandState } from "@/lib/hooks/use-expand-state";
 import { useSplitResize } from "@/lib/hooks/use-split-resize";
 import { cn } from "@/lib/utils";
 import { loadAdminPrefs } from "@/components/settings/admin-tab";
-import {
-  findDuplicateSignatures,
-  generateJsDoc,
-  type SignatureConflict,
-} from "@/lib/code-template-utils";
+import { findDuplicateSignatures, type SignatureConflict } from "@/lib/code-template-utils";
+import { generateCodeTemplateDocOrFallback } from "@/lib/api/api-misc-util";
 import { CodeTemplateTreeTable } from "./_components/code-template-tree-table";
 import { CodeTemplatesActionPanel } from "./_components/code-templates-action-panel";
 import { DockableToolbar } from "@/components/dockable-toolbar";
@@ -646,9 +643,10 @@ function CodeTemplatesPageInner() {
     }
   }
 
-  function handleGenerateJsDoc() {
+  async function handleGenerateJsDoc() {
     if (!selectedTemplateId || !selectedTemplate) return;
-    const newCode = generateJsDoc(selectedTemplate.code);
+    // Server-first, local port as fallback — see generateCodeTemplateDocOrFallback.
+    const newCode = await generateCodeTemplateDocOrFallback(selectedTemplate.code);
     updateTemplate(selectedTemplateId, { code: newCode });
     // Code replaced programmatically (not via the editor) — remount so it appears.
     setCodeReloadKey((k) => k + 1);
@@ -707,9 +705,10 @@ function CodeTemplatesPageInner() {
         );
       });
 
-      // Client-side syntax check across every changed template before persisting — mirrors
-      // Java's validateAll() gate, but names every offender #4). Blocks the save.
-      const jsError = validateCodeTemplatesForSave(updatedCodeTemplates, libraries);
+      // Syntax check across every changed template before persisting — mirrors Java's
+      // validateAll() gate, but names every offender #4). Server-side (real Rhino)
+      // when the Core supports it, else acorn fallback. Blocks the save.
+      const jsError = await validateCodeTemplatesForSave(updatedCodeTemplates, libraries);
       if (jsError) {
         setError(jsError);
         return;
@@ -768,7 +767,7 @@ function CodeTemplatesPageInner() {
 
     // Same blocking syntax gate as handleSave — throw so the navigation guard surfaces the
     // named offenders and aborts the save-on-exit #4).
-    const jsError = validateCodeTemplatesForSave(updatedCodeTemplates, libraries);
+    const jsError = await validateCodeTemplatesForSave(updatedCodeTemplates, libraries);
     if (jsError) throw new Error(jsError);
 
     // Save-on-exit (navigation guard): route through the same conflict-aware flow as

@@ -25,6 +25,7 @@ import {
   getChannelIdsAndNames,
   getChannelMetadata,
   bulkUpdateChannelGroups,
+  getChannelGroups,
 } from "@/lib/api/api-channels";
 import { getCache } from "@/lib/cache-store";
 import { takePendingChannelImport, type PendingChannelImport } from "@/lib/channel-import-store";
@@ -68,8 +69,13 @@ import {
   type DestinationConnectorState,
 } from "./channel-xml";
 import { cascadeOutboundDataType } from "./data-type-cascade";
-import { validateChannelFiltersAndTransformers } from "./filter-transformer-validation";
+import {
+  validateChannelFiltersAndTransformers,
+  resolveScriptSlots,
+  type ScriptSlot,
+} from "./filter-transformer-validation";
 import { getQueueStorageError } from "./queue-storage-validation";
+import { DEFAULT_GROUP_ID } from "./channel-columns";
 import {
   validateMetaDataColumns,
   validatePruning,
@@ -88,6 +94,7 @@ import type {
   ChannelEditorCoreProps,
   EditorTab,
   FtView,
+  FtDeepLink,
 } from "../_components/channel-editor-types";
 import type { FlowSelection } from "../_components/channel-flow-panel";
 
@@ -147,6 +154,8 @@ export interface ChannelEditorState {
   // FT overlay
   ftView: FtView | null;
   setFtView: (view: FtView | null) => void;
+  /** Config Search deep link into the FT overlay the URL opened. */
+  ftDeepLink: FtDeepLink | null;
 
   // View mode
   viewMode: "flow" | "tabs";
@@ -244,6 +253,27 @@ async function resolveOtherUsername(userId: number | undefined): Promise<string>
   }
 }
 
+/**
+ * Which filter/transformer overlay the `?tab=`/`?sub=`/`?dest=` deep link opens,
+ * or null when those params do not name one.
+ *
+ * Module-level and pure so the FT deep link can be gated on the same
+ * answer without duplicating the rules — a `?path=` is meaningless when the
+ * overlay itself never opens.
+ */
+function seedFtView(props: ChannelEditorCoreProps): FtView | null {
+  if (props.mode !== "edit" || !props.initialSub) return null;
+  const sub = props.initialSub;
+  if (sub !== "filter" && sub !== "transformer" && sub !== "responseTransformer") return null;
+  if (props.initialTab === "source") {
+    return { mode: sub as "filter" | "transformer", target: "source" };
+  }
+  if (props.initialTab === "destination") {
+    return { mode: sub, target: "dest", destIndex: props.initialDestIndex ?? 0 };
+  }
+  return null;
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useChannelEditor(
@@ -324,18 +354,36 @@ export function useChannelEditor(
   const [activePluginTab, setActivePluginTab] = useState<string | null>(null);
 
   // ── Filter / Transformer overlay ─────────────────────────────────────────
-  const [ftView, setFtView] = useState<FtView | null>(() => {
-    if (props.mode !== "edit" || !props.initialSub) return null;
-    const sub = props.initialSub;
-    if (sub !== "filter" && sub !== "transformer" && sub !== "responseTransformer") return null;
-    if (props.initialTab === "source") {
-      return { mode: sub as "filter" | "transformer", target: "source" };
-    }
-    if (props.initialTab === "destination") {
-      return { mode: sub, target: "dest", destIndex: props.initialDestIndex ?? 0 };
-    }
-    return null;
-  });
+  const [ftView, setFtViewState] = useState<FtView | null>(() => seedFtView(props));
+
+  // Config Search deep link to one element inside that overlay.
+  //
+  // Gated on seedFtView so it is null whenever the overlay itself did not open —
+  // a `path` without a usable `sub` has nowhere to land.
+  //
+  // Held in state, not rebuilt inline by the caller, so its identity is stable:
+  // a fresh `{ path, line }` on every render would make the editor below
+  // re-apply it forever.
+  const [ftDeepLink, setFtDeepLink] = useState<FtDeepLink | null>(() =>
+    props.mode === "edit" && props.initialFtPath && seedFtView(props)
+      ? { path: props.initialFtPath, line: props.initialFtLine }
+      : null
+  );
+
+  /**
+   * Any FT navigation the *user* performs drops the deep link, so it applies
+   * only to the overlay the URL opened. Without this, closing that overlay and
+   * opening an unrelated one would preselect the same index path there — the
+   * editor is not keyed, and its selection is seeded at mount.
+   *
+   * Clearing here rather than via a "consumed" callback from the editor keeps
+   * this a plain state update in an event handler: no effect, and nothing to
+   * re-fire.
+   */
+  const setFtView = useCallback((view: FtView | null) => {
+    setFtViewState(view);
+    setFtDeepLink(null);
+  }, []);
 
   // ── View mode (persisted globally to localStorage) ───────────────────────
   const VIEW_MODE_KEY = "bl-edit-channel-view-mode-v1";
@@ -394,7 +442,7 @@ export function useChannelEditor(
   // ── Mode-specific initialization ─────────────────────────────────────────
   const initKey = props.mode === "edit" ? props.channelId : "__new__";
 
-  //: an imported channel may have been queued for review by an import
+  // an imported channel may have been queued for review by an import
   // dialog before navigating here. Consume it exactly once. The take-and-clear
   // and the ref read happen inside the init effect (never during render); the
   // ref guard keeps the value stable across StrictMode's double effect run and
@@ -404,7 +452,7 @@ export function useChannelEditor(
     value: null,
   });
 
-  //: tags carried in an imported channel's <exportData>, queued here by the
+  // tags carried in an imported channel's <exportData>, queued here by the
   // seed branch and folded into `allTags` once the global tag set has loaded (the two
   // run as independent async effects). `{ tags, channelId }` or null when nothing is
   // pending. Intentionally not cleared once applied — the consuming effect is mount-only
@@ -448,7 +496,7 @@ export function useChannelEditor(
         setDestNames(derived.destNames);
         setLoading(false);
       });
-      //: recover the tags the export file carried so the imported channel
+      // recover the tags the export file carried so the imported channel
       // arrives tagged (matching the Java client). Stash them keyed to the channel's
       // final id; the tag-load effect merges them into `allTags` and marks dirty so
       // Save persists them. mode "new" → id from the seeded XML; "overwrite" → route id.
@@ -558,7 +606,7 @@ export function useChannelEditor(
   useEffect(() => {
     getChannelTags()
       .then((tags) => {
-        //: if this editor was seeded from an import that carried tags, fold
+        // if this editor was seeded from an import that carried tags, fold
         // them into the freshly-loaded global set (remapped to the channel's final id)
         // and mark dirty so Save persists them. The ref is intentionally not cleared:
         // this effect is mount-only ([] deps) but runs twice under StrictMode, and the
@@ -606,24 +654,31 @@ export function useChannelEditor(
 
   // ── Form change handlers ─────────────────────────────────────────────────
 
+  // XML writes use FUNCTIONAL updaters on purpose: two handlers can
+  // run in the same event tick (Set Data Types dialog-save immediately followed
+  // by the attachment-handler auto-fill in summary-tab), and React batches both
+  // setXml calls. A value write computed from the last-rendered `xml` closure
+  // (or from xmlRef, which only re-syncs in a post-render effect) would clobber
+  // the earlier queued write — silently discarding the datatype changes. The
+  // functional form composes over whatever is already queued.
   const handleSummaryChange = useCallback(
     (updates: Partial<SummaryState>) => {
-      if (!summary || !xml) return;
+      if (!summary) return;
       const next = { ...summary, ...updates };
       setSummary(next);
-      setXml(serializeSummaryToXml(xml, next));
+      setXml((x) => (x ? serializeSummaryToXml(x, next) : x));
     },
-    [summary, xml]
+    [summary]
   );
 
   const handleScriptsChange = useCallback(
     (updates: Partial<ScriptsState>) => {
-      if (!scripts || !xml) return;
+      if (!scripts) return;
       const next = { ...scripts, ...updates };
       setScripts(next);
-      setXml(serializeScriptsToXml(xml, next));
+      setXml((x) => (x ? serializeScriptsToXml(x, next) : x));
     },
-    [scripts, xml]
+    [scripts]
   );
 
   const handleTagsChange = useCallback((updated: ChannelTag[]) => {
@@ -635,6 +690,10 @@ export function useChannelEditor(
     const x = xmlRef.current;
     if (!x) return;
     const newXml = serializeDataTypesToXml(x, updated);
+    // Sync the always-current ref NOW (not at the post-render effect): a
+    // second read-modify-write handler in the same tick must see this write,
+    // not the pre-dialog xml — the attachment auto-fill clobber).
+    xmlRef.current = newXml;
     setXml(newXml);
     setSourceConnector(parseSourceConnectorFromXml(newXml));
     setDestinations(parseDestinationConnectorsFromXml(newXml));
@@ -662,7 +721,7 @@ export function useChannelEditor(
       }
       const base = serializeSourceConnectorToXml(x, next);
 
-      //: when the source OUTBOUND data type changes via the transformer
+      // when the source OUTBOUND data type changes via the transformer
       // Message Templates tab, cascade it to every destination inbound type — the
       // same cascade the Summary "Set Data Types" dialog performs, mirroring Java
       // DataTypesDialog.updateSingleDataType (SOURCE branch). No-op (returns `base`)
@@ -697,7 +756,7 @@ export function useChannelEditor(
         if (!x) return next;
         const base = serializeDestinationConnectorToXml(x, destIndex, next[destIndex]);
 
-        //: a destination's OUTBOUND type change (its transformer) cascades to
+        // a destination's OUTBOUND type change (its transformer) cascades to
         // that destination's response transformer inbound + outbound, mirroring Java
         // DataTypesDialog. No-op for ordinary transformer edits.
         const out =
@@ -834,7 +893,14 @@ export function useChannelEditor(
   const handleSourceConnectorImport = useCallback(async () => {
     const x = xmlRef.current;
     if (!x) return;
-    const fileXml = await pickXmlFileText();
+    let fileXml: string | null;
+    try {
+      fileXml = await pickXmlFileText();
+    } catch (e) {
+      // Oversize pick — distinct from a cancelled picker, which resolves null.
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
     if (fileXml == null) return;
     const mode = parseConnectorFileMode(fileXml);
     if (mode !== "SOURCE") {
@@ -858,7 +924,14 @@ export function useChannelEditor(
   const handleDestinationImport = useCallback(async () => {
     const x = xmlRef.current;
     if (!x) return;
-    const fileXml = await pickXmlFileText();
+    let fileXml: string | null;
+    try {
+      fileXml = await pickXmlFileText();
+    } catch (e) {
+      // Oversize pick — distinct from a cancelled picker, which resolves null.
+      setError(e instanceof Error ? e.message : String(e));
+      return;
+    }
     if (fileXml == null) return;
     const mode = parseConnectorFileMode(fileXml);
     if (mode !== "DESTINATION") {
@@ -963,15 +1036,62 @@ export function useChannelEditor(
       const newSrcErrors = new Set<string>();
       const newDestErrors = new Map<number, Set<string>>();
 
+      // Connector + connector-plugin validation. Connector/listener checks are structural and
+      // synchronous; connector *plugins* may carry a JavaScript script (HTTP Auth), whose parse
+      // is routed to the server via the validateNonScript/getScript split. We collect
+      // every check in tree order, resolve the plugin scripts in one batch, then format — so the
+      // message order, single-block grouping, and field highlights stay identical to before, but
+      // a script that acorn would reject and the server accepts no longer blocks the save. `target`
+      // routes each check's highlighted fields back to the right Set ("src" or a destination index).
+      type SaveCheck = {
+        label: string;
+        structuralMessages: string[];
+        fields: string[];
+        target: "src" | number;
+        slot?: ScriptSlot;
+      };
+      const checks: SaveCheck[] = [];
+      const pluginSlots: ScriptSlot[] = [];
+      const pluginScripts: Record<string, string> = {};
+
+      const collectPlugin = (
+        plugin: (typeof PLUGIN_REGISTRY)[number] | (typeof DESTINATION_PLUGIN_REGISTRY)[number],
+        propertiesXml: string | null,
+        label: string,
+        target: "src" | number
+      ) => {
+        const structural = (plugin.validateNonScript ?? plugin.validate)?.(propertiesXml) ?? [];
+        const script = plugin.getScript?.(propertiesXml) ?? null;
+        let slot: ScriptSlot | undefined;
+        if (script != null) {
+          const id = `plugin-${pluginSlots.length}`;
+          pluginScripts[id] = script;
+          slot = { location: "", elementName: "", elementType: "", message: null, scriptId: id };
+          pluginSlots.push(slot);
+        }
+        if (structural.length > 0 || slot) {
+          checks.push({
+            label,
+            structuralMessages: structural.map((e) => e.message),
+            fields: structural.map((e) => e.field),
+            target,
+            slot,
+          });
+        }
+      };
+
       const srcState = parseSourceConnectorFromXml(x);
+      const srcLabel = `Source (${srcState.transportName})`;
       const srcValidate = CONNECTOR_REGISTRY[srcState.transportName]?.validate;
       if (srcValidate) {
         const srcErrors = srcValidate(srcState.propertiesXml);
         if (srcErrors.length > 0) {
-          srcErrors.forEach((e) => newSrcErrors.add(e.field));
-          validationErrors.push(
-            `Source (${srcState.transportName}):\n${srcErrors.map((e) => `  - ${e.message}`).join("\n")}`
-          );
+          checks.push({
+            label: srcLabel,
+            structuralMessages: srcErrors.map((e) => e.message),
+            fields: srcErrors.map((e) => e.field),
+            target: "src",
+          });
         }
       }
       // Shared listener host/port check — runs for any socket-listener connector
@@ -979,10 +1099,12 @@ export function useChannelEditor(
       {
         const listenerErrors = validateListenerSettings(srcState.propertiesXml);
         if (listenerErrors.length > 0) {
-          listenerErrors.forEach((e) => newSrcErrors.add(e.field));
-          validationErrors.push(
-            `Source (${srcState.transportName}):\n${listenerErrors.map((e) => `  - ${e.message}`).join("\n")}`
-          );
+          checks.push({
+            label: srcLabel,
+            structuralMessages: listenerErrors.map((e) => e.message),
+            fields: listenerErrors.map((e) => e.field),
+            target: "src",
+          });
         }
       }
       for (const plugin of PLUGIN_REGISTRY) {
@@ -991,43 +1113,55 @@ export function useChannelEditor(
         // at hidden UI. Same enablement+license gate the render sites use
         // item 2).
         if (!surfaceGateEnabledSnapshot(plugin)) continue;
-        if (!plugin.validate) continue;
+        if (!plugin.validate && !plugin.validateNonScript && !plugin.getScript) continue;
         if (!plugin.isApplicable(srcState.transportName, srcState.propertiesXml)) continue;
-        const pluginErrors = plugin.validate(srcState.propertiesXml);
-        if (pluginErrors.length > 0) {
-          pluginErrors.forEach((e) => newSrcErrors.add(e.field));
-          validationErrors.push(
-            `Source (${srcState.transportName}):\n${pluginErrors.map((e) => `  - ${e.message}`).join("\n")}`
-          );
-        }
+        collectPlugin(plugin, srcState.propertiesXml, srcLabel, "src");
       }
       const dests = parseDestinationConnectorsFromXml(x);
       for (let i = 0; i < dests.length; i++) {
         const d = dests[i];
         if (!d.enabled) continue;
+        const destLabel = `Destination ${i + 1} "${d.name}" (${d.transportName})`;
         const destValidate = DESTINATION_CONNECTOR_REGISTRY[d.transportName]?.validate;
         if (destValidate) {
           const destErrors = destValidate(d.propertiesXml);
           if (destErrors.length > 0) {
-            newDestErrors.set(i, new Set(destErrors.map((e) => e.field)));
-            validationErrors.push(
-              `Destination ${i + 1} "${d.name}" (${d.transportName}):\n${destErrors.map((e) => `  - ${e.message}`).join("\n")}`
-            );
+            checks.push({
+              label: destLabel,
+              structuralMessages: destErrors.map((e) => e.message),
+              fields: destErrors.map((e) => e.field),
+              target: i,
+            });
           }
         }
         for (const plugin of DESTINATION_PLUGIN_REGISTRY) {
           if (!surfaceGateEnabledSnapshot(plugin)) continue;
-          if (!plugin.validate) continue;
+          if (!plugin.validate && !plugin.validateNonScript && !plugin.getScript) continue;
           if (!plugin.isApplicable(d.transportName, d.propertiesXml)) continue;
-          const pluginErrors = plugin.validate(d.propertiesXml);
-          if (pluginErrors.length > 0) {
-            const existing = newDestErrors.get(i) ?? new Set<string>();
-            pluginErrors.forEach((e) => existing.add(e.field));
-            newDestErrors.set(i, existing);
-            validationErrors.push(
-              `Destination ${i + 1} "${d.name}" (${d.transportName}):\n${pluginErrors.map((e) => `  - ${e.message}`).join("\n")}`
-            );
-          }
+          collectPlugin(plugin, d.propertiesXml, destLabel, i);
+        }
+      }
+
+      // One batch resolves every connector-plugin script. Separate from the
+      // filter/transformer batch below (which runs through validateChannelFiltersAndTransformers)
+      // — a save is not per-keystroke, so the extra round-trip is immaterial.
+      await resolveScriptSlots(pluginSlots, pluginScripts);
+
+      for (const check of checks) {
+        const messages = [...check.structuralMessages];
+        const fields = [...check.fields];
+        if (check.slot?.message) {
+          messages.push(check.slot.message);
+          fields.push("script");
+        }
+        if (messages.length === 0) continue;
+        validationErrors.push(`${check.label}:\n${messages.map((m) => `  - ${m}`).join("\n")}`);
+        if (check.target === "src") {
+          fields.forEach((f) => newSrcErrors.add(f));
+        } else {
+          const existing = newDestErrors.get(check.target) ?? new Set<string>();
+          fields.forEach((f) => existing.add(f));
+          newDestErrors.set(check.target, existing);
         }
       }
       if (validationErrors.length > 0) {
@@ -1047,7 +1181,7 @@ export function useChannelEditor(
     }
 
     {
-      const ftErrors = validateChannelFiltersAndTransformers(x);
+      const ftErrors = await validateChannelFiltersAndTransformers(x);
       if (ftErrors.length > 0) {
         setFtSaveErrored(true);
         const formatted = ftErrors
@@ -1200,18 +1334,33 @@ export function useChannelEditor(
       if (props.mode === "new") {
         const channelId = parseChannelId(xmlRef.current ?? "");
         if (channelId && props.defaultGroupId) {
-          const group = getCache().channelGroups.find((g) => g.id === props.defaultGroupId);
-          if (group) {
-            const updated = {
-              ...group,
-              channels: [...(group.channels ?? []), { id: channelId }],
-            };
-            // Force the overwrite (override=true): auto-adding a freshly-created channel to
-            // its group is a follow-up to the channel save, not a group-management action, so
-            // the concurrency prompt intentionally does not apply here.
-            await bulkUpdateChannelGroups([updated], [], true).catch(() => {
-              toast.error("Channel created, but failed to add to group.");
-            });
+          // The channel-group _bulkUpdate endpoint is authoritative: any group NOT in the
+          // payload is deleted server-side (DefaultChannelController.updateChannelGroups), so
+          // we must submit the full set of non-default groups — mirroring the Java client's
+          // ChannelPanel.addChannelToGroup — changing only the target group's channel list.
+          //
+          // Build that set from a FRESH server fetch, not getCache().channelGroups, which is
+          // only as current as the last channels-page visit and can be minutes stale while a
+          // channel is authored. A stale cache would omit any group another session added in
+          // the meantime, and override=true would then silently delete it. Re-fetching means
+          // the forced overwrite writes back current server state plus the new channel, so no
+          // concurrent group change is clobbered (Java prompts here instead; a freshly fetched
+          // set removes the premise for that prompt).
+          try {
+            const serverGroups = await getChannelGroups();
+            const target = serverGroups.find((g) => g.id === props.defaultGroupId);
+            if (target) {
+              const groups = serverGroups
+                .filter((g) => g.id !== DEFAULT_GROUP_ID)
+                .map((g) =>
+                  g.id === props.defaultGroupId
+                    ? { ...g, channels: [...(g.channels ?? []), { id: channelId }] }
+                    : g
+                );
+              await bulkUpdateChannelGroups(groups, [], true);
+            }
+          } catch {
+            toast.error("Channel created, but failed to add to group.");
           }
         }
         router.push(channelId ? `/channels/${channelId}/edit` : "/channels");
@@ -1322,6 +1471,7 @@ export function useChannelEditor(
     switchTab,
     ftView,
     setFtView,
+    ftDeepLink,
     viewMode,
     setViewMode,
     flowSelection,

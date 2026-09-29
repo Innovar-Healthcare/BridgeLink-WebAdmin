@@ -44,6 +44,7 @@ import {
   emptyFilterXml,
 } from "../../_lib/filter-transformer-xml";
 import { resolveXmlVersion, withVersion } from "../../_lib/channel-xml";
+import type { FtDeepLink } from "../channel-editor-types";
 import { filterEnabledStepTypes } from "../../_lib/filter-transformer-steps";
 import { usePluginSurfaceEnabled } from "@/lib/plugin-gating";
 import { generateScript } from "../../_lib/generated-script";
@@ -196,6 +197,8 @@ interface Params {
   transformerXml?: string;
   onTransformerChange?: (newXml: string) => void;
   autoValidate?: boolean;
+  /** Config Search deep link: element to preselect at mount. */
+  initialSelection?: FtDeepLink;
 }
 
 export function useFilterTransformerState({
@@ -206,6 +209,7 @@ export function useFilterTransformerState({
   transformerXml,
   onTransformerChange,
   autoValidate,
+  initialSelection,
 }: Params) {
   const baseXmlRef = useRef(
     xml.trim() ||
@@ -247,7 +251,29 @@ export function useFilterTransformerState({
     }
   });
 
-  const [selectedPath, setSelectedPath] = useState<number[] | null>(null);
+  // Seeded synchronously from the Config Search deep link rather than
+  // applied in an effect: `parsed` is already assigned by the time this
+  // initializer runs, so the correct step is selected on the very first render
+  // and the detail pane mounts once, with its editor, at the right element.
+  //
+  // Only a path that actually resolves is honored. A deep link can outlive the
+  // step it points at — the index is built from a channel revision someone may
+  // since have edited — and selecting nothing is the honest outcome there.
+  const [selectedPath, setSelectedPath] = useState<number[] | null>(() => {
+    const path = initialSelection?.path;
+    if (!path?.length) return null;
+    const initialElements = (parsed as FilterState).elements ?? [];
+    return getElementAtPath(initialElements, path) ? path : null;
+  });
+
+  /**
+   * Whether the deep link above actually landed on an element. The caller holds
+   * a pending line reveal keyed to that element; if the path did not resolve,
+   * that reveal must be dropped rather than left armed for whichever editor the
+   * user opens next. Captured once — a later manual selection does not make a
+   * stale deep link valid.
+   */
+  const [initialSelectionApplied] = useState(() => selectedPath !== null);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [bottomTab, setBottomTab] = useState<"step" | "generated">("step");
   const [stepValidation, setStepValidation] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -1244,6 +1270,7 @@ export function useFilterTransformerState({
     // UI state
     selectedPath,
     setSelectedPath,
+    initialSelectionApplied,
     addMenuOpen,
     setAddMenuOpen,
     bottomTab,

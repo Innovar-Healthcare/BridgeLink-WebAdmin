@@ -8,10 +8,14 @@
  * each row is a `CronProperty` (expression + description), with add/remove controls.
  */
 
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { HoverTooltip } from "@/components/hover-tooltip";
 import type { CronJob } from "@/app/(app)/channels/_lib/channel-xml";
 import { describeCronExpression, isValidCronExpression } from "@/lib/cron-utils";
+import { serverSupportsCronEndpoints, validateCron } from "@/lib/api/api-cron";
+import type { CronValidationResult } from "@/lib/api/api-cron";
+import { getCachedCronVerdict, setCachedCronVerdict } from "@/lib/cron-verdict-cache";
 import { cn } from "@/lib/utils";
 
 interface CronJobsTableProps {
@@ -25,6 +29,68 @@ const CRON_FORMAT_HELP =
   "Cron expressions must be in Quartz format with at least 6 fields: Seconds Minutes Hours Day-of-Month Month Day-of-Week [Year]. Example: 0 */5 8-17 * * ? fires every 5 minutes from 8am to 5pm every day.";
 
 export function CronJobsTable({ cronJobs, onChange, inputClassName }: CronJobsTableProps) {
+  // Server verdicts (real Quartz, keyed by trimmed expression. Augments the
+  // client `isValidCronExpression` highlight without blocking typing: when a verdict is
+  // present it reconciles the row's red highlight *bidirectionally* — reddening a
+  // client-"valid" expression Quartz rejects, and clearing a client-"invalid" one Quartz
+  // accepts (e.g. the `L-3` day-of-month offset that cron-parser can't parse).
+  //
+  // Hydrated from the shared cron-verdict-cache on mount — a table that
+  // remounts (e.g. switching pollingType away and back) or opens after another table
+  // already resolved the same expression this session shows the reconciled highlight
+  // immediately instead of flashing the client approximation while it re-fetches.
+  const [serverVerdicts, setServerVerdicts] = useState<Record<string, CronValidationResult>>(() => {
+    const initial: Record<string, CronValidationResult> = {};
+    for (const job of cronJobs) {
+      const expr = job.expression.trim();
+      if (!expr) continue;
+      const cached = getCachedCronVerdict(expr);
+      if (cached) initial[expr] = cached;
+    }
+    return initial;
+  });
+
+  // Distinct non-blank expressions currently in the table (validated once each).
+  const expressions = useMemo(
+    () => Array.from(new Set(cronJobs.map((j) => j.expression.trim()).filter(Boolean))),
+    [cronJobs]
+  );
+  const expressionsKey = expressions.join("\n");
+
+  useEffect(() => {
+    if (!serverSupportsCronEndpoints()) return;
+    const pending = expressions.filter((e) => !Object.hasOwn(serverVerdicts, e));
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      for (const expr of pending) {
+        validateCron(expr)
+          .then((res) => {
+            // Write-through to the shared cache regardless of `cancelled`/mount state —
+            // the save-gate validators read it independently of this
+            // component's lifecycle, and the verdict for a given expression string is
+            // valid whether or not this particular table instance is still around to
+            // show it.
+            setCachedCronVerdict(expr, res);
+            if (cancelled) return;
+            setServerVerdicts((prev) => ({ ...prev, [expr]: res }));
+          })
+          .catch(() => {
+            // Transport/HTTP error — leave the client verdict in place for this row.
+          });
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // expressionsKey captures the set of expressions to validate; serverVerdicts is read
+    // as a snapshot to skip already-known ones and must not re-trigger the effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expressionsKey]);
+
   return (
     // Fixed-width table that mirrors the Java client's 400px cron scroll pane
     // (PollingSettingsPanel "w 400!"): the columns split a constant width rather
@@ -48,14 +114,26 @@ export function CronJobsTable({ cronJobs, onChange, inputClassName }: CronJobsTa
         // Pink-highlight a row whose (non-blank) expression is not a valid Quartz
         // expression — mirrors Java PollingSettingsPanel's invalid-row highlight.
         // Blank rows aren't reddened live; the save-time validator still rejects them.
-        const invalid = job.expression.trim() !== "" && !isValidCronExpression(job.expression);
+        // When a server verdict is available it wins over the client approximation
+        // (both directions); otherwise fall back to the sync client check.
+        const trimmed = job.expression.trim();
+        const verdict = Object.hasOwn(serverVerdicts, trimmed)
+          ? serverVerdicts[trimmed]
+          : undefined;
+        const invalid =
+          trimmed !== "" && (verdict ? !verdict.valid : !isValidCronExpression(job.expression));
+        const serverMessage = verdict && !verdict.valid ? verdict.message : null;
         return (
           <div
             key={idx}
             className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.5rem] gap-2 items-center"
           >
             <HoverTooltip
-              content={invalid ? `Invalid cron expression. ${CRON_FORMAT_HELP}` : CRON_FORMAT_HELP}
+              content={
+                invalid
+                  ? `Invalid cron expression.${serverMessage ? ` ${serverMessage}` : ""} ${CRON_FORMAT_HELP}`
+                  : CRON_FORMAT_HELP
+              }
             >
               <input
                 type="text"

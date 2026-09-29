@@ -36,6 +36,29 @@ export interface MonacoTokenProvider {
    * module; the wiring code casts appropriately.
    */
   tokenizer: Record<string, unknown[]>;
+  /**
+   * Colors for the token names this tokenizer emits, merged into the app's
+   * global light theme. Optional — without them the tokens inherit the theme's
+   * base colors and the format renders as plain text.
+   *
+   * Monaco has one theme per instance for the whole page, so these
+   * are appended to that single theme rather than defining a new one. Use token
+   * names unique to this data type; a name that collides with another
+   * language's would restyle it too.
+   */
+  tokenRules?: MonacoThemeTokenRule[];
+  /** As `tokenRules`, for dark mode. Falls back to `tokenRules` when omitted. */
+  darkTokenRules?: MonacoThemeTokenRule[];
+}
+
+/** A token color contributed by a data type plugin. */
+export interface MonacoThemeTokenRule {
+  /** Token name emitted by the tokenizer, e.g. "dimse-tag". */
+  token: string;
+  /** Six-digit hex, no leading "#". */
+  foreground?: string;
+  /** e.g. "bold", "italic", "bold italic". */
+  fontStyle?: string;
 }
 
 // ── Code template contributions ───────────────────────────────────────────────

@@ -22,6 +22,7 @@ import {
   type EnrichedChannel,
   channelsInGroupServerOrder,
   isChannelEnabled,
+  newChannelPath,
 } from "./channel-helpers";
 import { DEFAULT_GROUP_ID } from "./channel-columns";
 import { CHANNEL_GROUP_CONFLICT_MESSAGE } from "./use-channel-group-save";
@@ -332,7 +333,7 @@ export function useChannelOperations(params: ChannelOperationsParams): ChannelOp
         ids.map(async (id): Promise<{ id: string; messages: string[] }> => {
           try {
             const xml = await getChannelXml(id);
-            return { id, messages: validateChannelForEnable(xml) };
+            return { id, messages: await validateChannelForEnable(xml) };
           } catch {
             // Could not fetch/parse the channel — never silently enable it.
             return { id, messages: ["Channel could not be read for validation."] };
@@ -441,7 +442,7 @@ export function useChannelOperations(params: ChannelOperationsParams): ChannelOp
 
   // ── Single-channel actions (context menu) ──
 
-  //: channelRowActions must keep a STABLE identity so the memoized
+  // channelRowActions must keep a STABLE identity so the memoized
   // ChannelRow rows skip re-rendering on selection changes and manual refreshes.
   // The methods read the latest selection / channel list / sibling handlers from
   // a ref synced after each render, so behavior is unchanged while the object
@@ -450,6 +451,7 @@ export function useChannelOperations(params: ChannelOperationsParams): ChannelOp
   const rowActionDeps = {
     selectedIds,
     channels,
+    allGroups,
     handleDeploy,
     handleEnable,
     runEnableWithValidation,
@@ -544,6 +546,16 @@ export function useChannelOperations(params: ChannelOperationsParams): ChannelOp
           d.selectedIds.size > 0 && d.selectedIds.has(id) ? d.selectedIds : new Set([id]);
         setAssignGroupIds(effective);
         setAssignGroupOpen(true);
+      },
+      onNewChannel: (id: string) => {
+        const d = rowActionDepsRef.current;
+        // Java parity (ChannelPanel.createNewChannel): from a channel node, resolve the
+        // containing (non-default) group and scope the new channel to it. A channel in the
+        // default group resolves to null → an ungrouped new channel.
+        const group = d.allGroups.find(
+          (g) => g.id !== DEFAULT_GROUP_ID && (g.channels ?? []).some((c) => c.id === id)
+        );
+        d.push(newChannelPath(group ? group.id : null));
       },
       onDelete: (id: string) => {
         const d = rowActionDepsRef.current;

@@ -68,7 +68,7 @@ export function CloneChannelDialog({
         .replace(/<id>[^<]+<\/id>/, `<id>${newId}</id>`)
         .replace(/<name>[^<]+<\/name>/, `<name>${trimmed}</name>`);
       await createChannelFromXml(patched);
-      //: copy the source channel's tag memberships onto the clone, mirroring
+      // copy the source channel's tag memberships onto the clone, mirroring
       // the Java clone flow (adds the new id to every tag that referenced the source).
       // Best-effort: the channel is already created, so a tag-write failure (e.g. the
       // user lacks the TAGS_MANAGE permission) must not make a successful clone look

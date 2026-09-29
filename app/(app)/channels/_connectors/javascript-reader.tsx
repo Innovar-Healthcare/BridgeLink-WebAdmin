@@ -48,7 +48,6 @@ function JavaScriptReaderTopSection({ propertiesXml, onChange, isDark }: Connect
 function JavaScriptReaderBottomSection({
   propertiesXml,
   onChange,
-  isDark,
   invalidFields,
   channelId = "",
   channelName,
@@ -117,7 +116,6 @@ function JavaScriptReaderBottomSection({
           onChange={handleScriptChange}
           beforeMount={(m) => registerRhinoLanguage(m)}
           onMount={handleMount}
-          theme={isDark ? "mirth-js-dark" : "mirth-js"}
           height="100%"
           width="100%"
           options={getRhinoEditorOptions({

@@ -2,6 +2,7 @@ import { searchMessages, getMaxMessageId, auditQueriedPHIMessage } from "@/lib/a
 import type { MessageFilter } from "@/lib/api-client";
 import type { Message } from "@/lib/types";
 import { stringifyMessageFilter } from "./message-helpers";
+import { clearMessageCache } from "./message-cache";
 
 /**
  * Messages search orchestration, extracted from the page so the stale-response
@@ -16,6 +17,13 @@ import { stringifyMessageFilter } from "./message-helpers";
 export interface MessageSearchDeps {
   /** Monotonic token; bumped per fetch. In-flight fetches bail if it advances. */
   seqRef: { current: number };
+  /** Aborts the previous in-flight search/page request before a new one starts, mirroring
+   *  Java's `getServerConnection().abort(getAbortOperations())` before loadPageNumber
+   *  (MessageBrowser.java:906-912) — searchMessages is `abortable=true` on the server. NOTE:
+   *  the Next.js proxy does not currently forward the abort signal upstream (see
+   *  app/api/proxy/[...path]/route.ts), so this only stops the browser from waiting on a
+   *  superseded response — it does not yet cancel the BridgeLink server's in-progress query. */
+  abortControllerRef: { current: AbortController | null };
   /** Filter pinned at search start (incl. maxMessageId); reused by pagination. */
   activeFilterRef: { current: MessageFilter | null };
   /** Channel pinned at search start; reused by pagination. */
@@ -44,6 +52,45 @@ export interface MessageSearchDeps {
   setSelectedMessage: (v: Message | null) => void;
   setFullMessage: (v: Message | null) => void;
   setContentError: (v: string) => void;
+  /** Set once a page proves it's the last one (see resolvePage below); reset to null by the
+   *  caller at the start of a brand-new search. Mirrors Java disabling the Count button once
+   *  itemCount is known (MessageBrowser.java:948, 967-975). */
+  setTotalCount: (v: number | null) => void;
+}
+
+/**
+ * Fetch one page using Java's pageSize+1 look-ahead (PaginatedList.java:75-95): request one
+ * extra row so an exactly-full final page doesn't produce a phantom "Next". When the returned
+ * page turns out to be the last one, infer the total item count the same way Java's
+ * MessageBrowser worker does on `done()` (MessageBrowser.java:967-975) — offset-so-far plus
+ * however many rows this (possibly empty) page actually had.
+ */
+async function resolvePage(
+  channelId: string,
+  filter: MessageFilter,
+  pageNum: number,
+  pageSize: number,
+  signal: AbortSignal
+): Promise<{ messages: Message[]; hasNextPage: boolean; inferredTotalCount: number | null }> {
+  const fetched = await searchMessages(channelId, filter, {
+    offset: pageNum * pageSize,
+    limit: pageSize + 1,
+    includeContent: false,
+    signal,
+  });
+  const all = fetched ?? [];
+  const hasNextPage = all.length > pageSize;
+  const messages = hasNextPage ? all.slice(0, pageSize) : all;
+  const inferredTotalCount = hasNextPage ? null : pageNum * pageSize + messages.length;
+  return { messages, hasNextPage, inferredTotalCount };
+}
+
+/** Abort whatever the previous search/page call started, then arm a fresh controller. */
+function nextAbortController(deps: MessageSearchDeps): AbortController {
+  deps.abortControllerRef.current?.abort();
+  const controller = new AbortController();
+  deps.abortControllerRef.current = controller;
+  return controller;
 }
 
 /**
@@ -59,6 +106,10 @@ export async function runMessageSearch(
   deps: MessageSearchDeps
 ): Promise<void> {
   const seq = ++deps.seqRef.current;
+  const controller = nextAbortController(deps);
+  // A new search invalidates every cached message/attachment from the previous one (Java:
+  // runSearch → clearCache(), MessageBrowser.java:681) — plain pagination does not.
+  clearMessageCache();
   deps.setLoading(true);
   deps.setError("");
   try {
@@ -83,11 +134,13 @@ export async function runMessageSearch(
       deps.setUserHasSearched(true);
     }
 
-    const msgs = await searchMessages(channelId, filter, {
-      offset: pageNum * deps.pageSize,
-      limit: deps.pageSize,
-      includeContent: false,
-    });
+    const { messages, hasNextPage, inferredTotalCount } = await resolvePage(
+      channelId,
+      filter,
+      pageNum,
+      deps.pageSize,
+      controller.signal
+    );
 
     if (seq !== deps.seqRef.current) return; // stale — guard before audit
 
@@ -119,13 +172,15 @@ export async function runMessageSearch(
       if (seq !== deps.seqRef.current) return; // stale after audit success
     }
 
-    deps.setMessages(msgs ?? []);
+    deps.setMessages(messages);
     deps.setPage(pageNum);
-    deps.setHasNextPage((msgs?.length ?? 0) >= deps.pageSize);
+    deps.setHasNextPage(hasNextPage);
+    deps.setTotalCount(inferredTotalCount);
     // The advanced-filter connector list is NOT derived from results — it comes from the
     // authoritative GET /channels/{id}/connectorNames fetch on channel load, so the
     // checkbox list is complete and stable across paging/searching.
   } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") return; // superseded by a newer call
     if (seq !== deps.seqRef.current) return;
     deps.setError(err instanceof Error ? err.message : "Failed to load messages");
   } finally {
@@ -144,22 +199,27 @@ export async function runMessagePage(pageNum: number, deps: MessageSearchDeps): 
   const channelId = deps.activeChannelRef.current;
   if (!filter || !channelId) return;
   const seq = ++deps.seqRef.current;
+  const controller = nextAbortController(deps);
   deps.setLoading(true);
   deps.setError("");
   try {
-    const msgs = await searchMessages(channelId, filter, {
-      offset: pageNum * deps.pageSize,
-      limit: deps.pageSize,
-      includeContent: false,
-    });
+    const { messages, hasNextPage, inferredTotalCount } = await resolvePage(
+      channelId,
+      filter,
+      pageNum,
+      deps.pageSize,
+      controller.signal
+    );
     if (seq !== deps.seqRef.current) return;
-    deps.setMessages(msgs ?? []);
+    deps.setMessages(messages);
     deps.setPage(pageNum);
-    deps.setHasNextPage((msgs?.length ?? 0) >= deps.pageSize);
+    deps.setHasNextPage(hasNextPage);
+    if (inferredTotalCount !== null) deps.setTotalCount(inferredTotalCount);
     deps.setSelectedMessage(null);
     deps.setFullMessage(null);
     deps.setContentError("");
   } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") return;
     if (seq !== deps.seqRef.current) return;
     deps.setError(err instanceof Error ? err.message : "Failed to load messages");
   } finally {
