@@ -34,7 +34,7 @@ RAM. The bottleneck is **network egress to browsers**, not CPU or RAM.
 
 - **Linux server (Docker)**: any distribution with Docker 20.10+ —
   RHEL 8+, Ubuntu 20.04+, Debian 11+, Amazon Linux 2/2023, SLES 15+
-- **Linux server (native)**: Node.js 22.x LTS; same distributions as above
+- **Linux server (native)**: Node.js 22.x LTS, 22.23.4 or later; same distributions as above
 - **Windows / macOS**: supported for local testing or single-user use; not
   recommended as a server install
 

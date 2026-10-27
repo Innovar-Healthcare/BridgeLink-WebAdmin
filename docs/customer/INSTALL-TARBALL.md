@@ -13,14 +13,15 @@ For hardware, OS, browser, and network requirements, see
 
 None. **Node.js is downloaded automatically on first launch** if it is not already installed.
 
-The start scripts (`start-https.sh` / `start-https.bat`) check for Node.js 22 and, if it is
-missing, download the official binary from nodejs.org into a local `.node/` folder next to the
-script. An internet connection is required only on that first run; subsequent launches are
-fully offline.
+The start scripts (`start-https.sh` / `start-https.bat`) check for Node.js 22 (22.23.4 or
+later) and, if it is missing, older, or another major version, download the official binary
+from nodejs.org into a local `.node/` folder next to the script. An internet connection is
+required only on that run; subsequent launches are fully offline. A WebAdmin upgrade that raises
+the minimum version downloads once more.
 
 If you prefer to install Node.js yourself before running the app, download the LTS installer
-from [nodejs.org](https://nodejs.org) and select **Node.js 22.x**. The scripts will detect it
-and skip the automatic download.
+from [nodejs.org](https://nodejs.org) and select the latest **Node.js 22.x** (22.23.4 or
+later). The scripts will detect it and skip the automatic download.
 
 ---
 
@@ -145,7 +146,8 @@ Double-click **`start-https.bat`** in Explorer, or run it from any terminal
 
 The script will:
 
-1. Download Node.js 22 automatically if not installed (one-time, requires internet)
+1. Download Node.js 22 automatically if it is not installed or is older than 22.23.4 (one-time,
+   requires internet)
 2. Use a `.\certs\server.crt` + `.\certs\server.key` pair if you dropped one there; otherwise
    generate a self-signed certificate into `%LOCALAPPDATA%\BridgeLink\certs` (one-time, no
    admin rights needed)
@@ -286,11 +288,11 @@ let the reverse proxy handle TLS.
 
 ### `node: command not found` / download fails on first run
 
-The start script could not find Node.js and the automatic download failed (no internet access,
-firewall, or proxy blocking nodejs.org). To resolve:
+The start script could not find Node.js 22 (22.23.4 or later) and the automatic download failed
+(no internet access, firewall, or proxy blocking nodejs.org). To resolve:
 
-1. Download the Node.js 22 LTS installer manually from [nodejs.org](https://nodejs.org) on a
-   machine with internet access.
+1. Download the Node.js 22 LTS installer (22.23.4 or later) manually from
+   [nodejs.org](https://nodejs.org) on a machine with internet access.
 2. Install it on the target machine and re-open the terminal.
 3. Re-run the start script — it will detect the installed version and skip the download.
 

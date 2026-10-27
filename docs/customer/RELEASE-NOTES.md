@@ -1,5 +1,70 @@
 # Release Notes
 
+## 26.9.1 (October 28, 2026)
+
+This is a security patch. It moves the Web Administrator to Node.js 22.23.4, which
+fixes a remote code execution flaw in Node.js, and updates Next.js to fix critical
+advisories. It also changes how the service is installed so it no longer runs with
+full system rights. Upgrade as soon as you can.
+
+**Before you upgrade,** read [Upgrade notes for 26.9.1](#upgrade-notes-for-2691) if you
+install on Linux or macOS with your own Node.js, run the tarball or zip on an offline
+machine, or set your own certificate in `webadmin.conf`.
+
+---
+
+### Security
+
+- **Node.js 22.23.4.** Earlier Node.js 22 releases have a flaw in their Brotli
+  decompression that lets a server the Web Administrator connects to run code on the
+  Web Administrator's host (CVE-2026-111497). The Windows installer installs 22.23.4,
+  the Docker image is built on it, and the tarball and zip start scripts download it
+  when the Node.js they find is older.
+- **Next.js 16.4.3,** which fixes critical advisories in Next.js 16.0.0 to 16.4.0.
+- **The service no longer runs with full system rights.** On Linux it runs as its own
+  account, `blwebadmin` (`_blwebadmin` on macOS), instead of root. On Windows it runs
+  as `NT SERVICE\BridgeLinkWebAdmin` instead of LocalSystem.
+- **Windows: locked-down runtime and certificate folders.** Setup takes over
+  `%ProgramData%\BridgeLink\.node` and `%ProgramData%\BridgeLink\certs`, so other local
+  users can no longer place files next to `node.exe` or read the TLS private key.
+
+### Fixes
+
+- Upgrading no longer drops lines you added to `webadmin.conf` by hand, such as
+  `BRIDGELINK_CA_CERT`. Before, an upgrade could silently turn off certificate pinning.
+
+---
+
+### Upgrade notes for 26.9.1
+
+- **Linux and macOS: Node.js 22.23.4 or later is required.** `install.sh` stops on an
+  older Node.js 22, before it changes anything, and prints the command to upgrade it.
+  Your current install keeps running. `BL_ALLOW_UNSUPPORTED_NODE=1` installs anyway,
+  which is not supported and leaves the flaw in place.
+- **Tarball and zip installs.** The start scripts download Node.js 22.23.4 once if the
+  Node.js they find is older or a different major version. On a machine without
+  internet access, install Node.js 22.23.4 or a later 22.x by hand first.
+- **Your own certificate in `webadmin.conf`.** The service account must be able to read
+  both files. On Linux and macOS, `install.sh` checks this and stops with the commands
+  to fix the permissions if it cannot. On Windows, if the service account cannot be
+  set, the service stays on LocalSystem and Setup writes the reason to its log in the
+  install folder's `logs` directory.
+- **Windows: `%ProgramData%\BridgeLink` must not be a link or owned by another user.**
+  Setup stops if it is, and its log gives the commands to fix it.
+- **Docker.** Pull the `26.9.1` image. Images already published keep the old Node.js.
+
+### Compatibility
+
+- **BridgeLink server:** 26.3.0 or newer, unchanged from 26.9.0.
+- **Node.js:** 22.23.4 or a later 22.x for the tarball and zip installs (26.9.0 accepted
+  any 22.x).
+- **Browsers:** current versions of Chrome, Edge, Firefox, and Safari.
+
+When reporting a bug, please include the build identifier (`26.9.1`). See
+[Getting help](#getting-help).
+
+---
+
 ## 26.9.0 (September 30, 2026)
 
 This release lets server extensions add their own screens to the Web Administrator

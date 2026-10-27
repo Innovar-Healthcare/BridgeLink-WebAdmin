@@ -62,7 +62,7 @@ licensing, contact Innovar Healthcare.
 
 Including these details speeds up our response significantly:
 
-1. **Build identifier** — the image tag (e.g. `26.9.0`) or the artifact filename you installed
+1. **Build identifier** — the image tag (e.g. `26.9.1`) or the artifact filename you installed
 2. **Browser and OS** — e.g. "Chrome 124 on Windows 11" or "Safari 17 on
    macOS 14"
 3. **What you were trying to do** — one sentence is fine

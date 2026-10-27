@@ -59,7 +59,7 @@ BridgeLink server over its REST API.
 - A running **BridgeLink server** (reachable over HTTPS) to administer.
 - To run the app server:
   - **Docker** 20.10+ (recommended), **or**
-  - **Node.js 22.x LTS** for a native install / local development.
+  - **Node.js 22.x LTS** (22.23.4 or later) for a native install / local development.
 - A modern browser (current Chrome, Edge, Firefox, or Safari).
 
 See [System Requirements](docs/customer/SYSTEM-REQUIREMENTS.md) for sizing and network details.

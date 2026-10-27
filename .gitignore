@@ -94,6 +94,7 @@ plugins/cognito/
 plugins/astm/
 plugins/coordinator/
 plugins/scripts/
+plugins/docs/
 plugins/_template/
 plugins/.github/
 plugins/.planning/

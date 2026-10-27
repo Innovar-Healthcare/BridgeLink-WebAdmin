@@ -35,6 +35,12 @@ const repoRoot = resolve(__dirname, "..");
  * @fontsource copy: OFL 1.1 condition 2 requires the correct copyright notice to
  * travel with the redistributed font, and @fontsource's own LICENSE files are not
  * reliable for that (its cascadia-code LICENSE, for one, credits "Google Inc.").
+ *
+ * Before adding a family, read the copyright line of its upstream LICENSE for
+ * "with Reserved Font Name". OFL treats a subset or webfont conversion as a
+ * Modified Version, which may not carry a reserved name — that is why Cascadia
+ * Code is absent (see app/globals.css). Grepping for the phrase proves nothing:
+ * it appears in the standard OFL body of every OFL font.
  */
 const FAMILIES = [
   {

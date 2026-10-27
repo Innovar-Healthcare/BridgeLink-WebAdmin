@@ -16,7 +16,7 @@ pin to whichever level of stability you want:
 | Tag            | Example        | Use for                                                    |
 | -------------- | -------------- | ---------------------------------------------------------- |
 | `:latest`      | `:latest`      | "Give me whatever's current"                               |
-| `:<version>`   | `:26.9.0`      | Pin to a specific release (recommended for production)     |
+| `:<version>`   | `:26.9.1`      | Pin to a specific release (recommended for production)     |
 | `:YYYYMMDD`    | `:20260511`    | Pin to a specific day's build (reproducibility / rollback) |
 | `:sha-<short>` | `:sha-b6a7884` | Pin to an exact commit                                     |
 
